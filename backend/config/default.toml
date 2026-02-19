@@ -1,0 +1,42 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[auth]
+enabled = true
+jwt_secret = "change-me-in-production-min-32-characters-long"
+jwt_expiry_hours = 24
+
+[database]
+path = "./data/rag.db"
+max_connections = 5
+
+[minio]
+endpoint = "http://localhost:9000"
+region = "us-east-1"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+bucket_name = "rag-documents"
+use_ssl = false
+
+[qdrant]
+url = "http://localhost:6333"
+collection_name = "rag_vectors"
+vector_size = 1536
+
+[llm]
+default_provider = "openai"
+default_model = "gpt-4o"
+default_embedding_model = "text-embedding-3-small"
+
+[features]
+auth_enabled = true
+pdf_upload_enabled = true
+web_crawl_enabled = true
+admin_panel_enabled = true
+
+[crawler]
+max_concurrent = 5
+max_depth = 3
+request_timeout_secs = 30
+user_agent = "RAG-Pipeline-Bot/1.0"

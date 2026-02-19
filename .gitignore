@@ -1,0 +1,35 @@
+# Rust
+backend/target/
+**/*.rs.bk
+
+# Node
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Data
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+docker-data/

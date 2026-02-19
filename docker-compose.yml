@@ -1,0 +1,81 @@
+services:
+  # ── Infrastructure (always runs) ──────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb local/rag-documents --ignore-existing;
+      exit 0;
+      "
+
+  # ── Application (profile-gated) ──────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles: ["app", "backend"]
+    ports:
+      - "3000:3000"
+    depends_on:
+      - qdrant
+      - minio
+    environment:
+      RUN_ENV: production
+      APP__SERVER__HOST: "0.0.0.0"
+      APP__SERVER__PORT: "3000"
+      APP__DATABASE__PATH: "/app/data/rag.db"
+      APP__MINIO__ENDPOINT: "http://minio:9000"
+      APP__MINIO__ACCESS_KEY: "minioadmin"
+      APP__MINIO__SECRET_KEY: "minioadmin"
+      APP__MINIO__BUCKET_NAME: "rag-documents"
+      APP__QDRANT__URL: "http://qdrant:6333"
+      APP__AUTH__JWT_SECRET: "dev-secret-change-me-in-production-min-32-chars"
+    volumes:
+      - backend_data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    profiles: ["app", "frontend"]
+    ports:
+      - "5173:3000"
+    depends_on:
+      backend:
+        condition: service_started
+        required: false
+    environment:
+      VITE_API_URL: "http://localhost:3000"
+      ORIGIN: "http://localhost:5173"
+
+volumes:
+  qdrant_data:
+  minio_data:
+  backend_data:

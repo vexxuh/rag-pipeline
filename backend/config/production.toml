@@ -1,0 +1,11 @@
+[server]
+host = "0.0.0.0"
+
+[minio]
+endpoint = "http://minio.railway.internal:9000"
+
+[qdrant]
+url = "http://qdrant.railway.internal:6333"
+
+[crawler]
+max_concurrent = 10
