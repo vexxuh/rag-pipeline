@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub llm: LlmConfig,
     pub features: FeatureFlags,
     pub crawler: CrawlerConfig,
+    pub widget: WidgetConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -39,7 +40,7 @@ pub struct ResendConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    pub path: String,
+    pub url: String,
     pub max_connections: u32,
 }
 
@@ -74,6 +75,7 @@ pub struct FeatureFlags {
     pub pdf_upload_enabled: bool,
     pub web_crawl_enabled: bool,
     pub admin_panel_enabled: bool,
+    pub widget_enabled: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -82,6 +84,12 @@ pub struct CrawlerConfig {
     pub max_depth: usize,
     pub request_timeout_secs: u64,
     pub user_agent: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WidgetConfig {
+    pub enabled: bool,
+    pub default_rate_limit: i32,
 }
 
 impl AppConfig {

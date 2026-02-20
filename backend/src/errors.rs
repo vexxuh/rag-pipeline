@@ -19,8 +19,8 @@ pub enum AppError {
     #[error("Feature disabled: {0}")]
     FeatureDisabled(String),
 
-    #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    #[error("Rate limit exceeded")]
+    RateLimited,
 
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
@@ -40,13 +40,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::FeatureDisabled(msg) => (StatusCode::FORBIDDEN, msg.clone()),
-            AppError::Database(e) => {
-                tracing::error!("Database error: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
-                )
-            }
+            AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
             AppError::Internal(e) => {
                 tracing::error!("Internal error: {e}");
                 (

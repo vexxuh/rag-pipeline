@@ -2,7 +2,7 @@ export interface User {
   id: string;
   username: string;
   email: string;
-  role: "admin" | "user";
+  role: "admin" | "maintainer" | "user";
   created_at: string;
   updated_at: string;
 }
@@ -100,4 +100,55 @@ export interface AdminModel {
   model_type: "completion" | "embedding";
   is_default: boolean;
   created_at: string;
+}
+
+export interface ConversationLog {
+  id: string;
+  user_id: string;
+  username: string;
+  email: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LogsResponse {
+  conversations: ConversationLog[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface LogDetail {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: Message[];
+}
+
+export interface EmbedKey {
+  id: string;
+  name: string;
+  key_prefix: string;
+  allowed_domains: string[];
+  system_prompt: string;
+  rate_limit: number;
+  widget_title: string;
+  primary_color: string;
+  greeting_message: string;
+  provider: string;
+  model: string;
+  is_active: boolean;
+  total_conversations: number;
+  total_messages: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateEmbedKeyResponse {
+  embed_key: EmbedKey;
+  raw_key: string;
 }

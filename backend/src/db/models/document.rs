@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,15 +53,15 @@ impl TryFrom<&str> for DocumentStatus {
 
 #[derive(Clone)]
 pub struct DocumentRepository {
-    pool: Pool<SqliteConnectionManager>,
+    pool: PgPool,
 }
 
 impl DocumentRepository {
-    pub fn new(pool: Pool<SqliteConnectionManager>) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
-    pub fn create(
+    pub async fn create(
         &self,
         user_id: &str,
         original_filename: &str,
@@ -71,15 +69,25 @@ impl DocumentRepository {
         content_type: &str,
         size_bytes: i64,
     ) -> Result<Document> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
-        conn.execute(
-            "INSERT INTO documents (id, user_id, filename, original_filename, minio_key, content_type, size_bytes, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![id, user_id, id, original_filename, minio_key, content_type, size_bytes, "uploading", now],
+        sqlx::query(
+            "INSERT INTO documents
+                 (id, user_id, filename, original_filename, minio_key, content_type, size_bytes, status, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
+        .bind(&id)
+        .bind(user_id)
+        .bind(&id) // filename = id placeholder
+        .bind(original_filename)
+        .bind(minio_key)
+        .bind(content_type)
+        .bind(size_bytes)
+        .bind("uploading")
+        .bind(now)
+        .execute(&self.pool)
+        .await
         .context("Failed to insert document")?;
 
         Ok(Document {
@@ -92,102 +100,118 @@ impl DocumentRepository {
             size_bytes,
             status: DocumentStatus::Uploading,
             error_message: None,
-            created_at: now,
+            created_at: now.to_rfc3339(),
             processed_at: None,
         })
     }
 
-    pub fn find_by_id(&self, id: &str) -> Result<Option<Document>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, filename, original_filename, minio_key, content_type, size_bytes, status, error_message, created_at, processed_at
-             FROM documents WHERE id = ?1",
-        )?;
+    pub async fn find_by_id(&self, id: &str) -> Result<Option<Document>> {
+        let row = sqlx::query(
+            "SELECT id, user_id, filename, original_filename, minio_key, content_type,
+                    size_bytes, status, error_message,
+                    to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,
+                    to_char(processed_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS processed_at
+             FROM documents WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to query document")?;
 
-        let doc = stmt
-            .query_row(params![id], Self::map_row)
-            .optional();
-
-        match doc {
-            Ok(d) => Ok(d),
-            Err(e) => Err(anyhow::anyhow!("Query error: {e}")),
-        }
+        row.map(|r| Self::map_row(&r)).transpose()
     }
 
-    pub fn find_by_user(&self, user_id: &str) -> Result<Vec<Document>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, filename, original_filename, minio_key, content_type, size_bytes, status, error_message, created_at, processed_at
-             FROM documents WHERE user_id = ?1 ORDER BY created_at DESC",
-        )?;
+    pub async fn find_by_user(&self, user_id: &str) -> Result<Vec<Document>> {
+        let rows = sqlx::query(
+            "SELECT id, user_id, filename, original_filename, minio_key, content_type,
+                    size_bytes, status, error_message,
+                    to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,
+                    to_char(processed_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS processed_at
+             FROM documents WHERE user_id = $1 ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list documents")?;
 
-        let docs = stmt
-            .query_map(params![user_id], Self::map_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context("Failed to collect documents")?;
-
-        Ok(docs)
+        rows.iter().map(|r| Self::map_row(r)).collect()
     }
 
-    pub fn update_status(
+    pub async fn update_status(
         &self,
         id: &str,
         status: &DocumentStatus,
         error_message: Option<&str>,
     ) -> Result<()> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
+        let processed_at: Option<chrono::DateTime<chrono::Utc>> =
+            if *status == DocumentStatus::Ready || *status == DocumentStatus::Failed {
+                Some(now)
+            } else {
+                None
+            };
 
-        let processed_at = if *status == DocumentStatus::Ready || *status == DocumentStatus::Failed
-        {
-            Some(now)
-        } else {
-            None
-        };
-
-        conn.execute(
-            "UPDATE documents SET status = ?1, error_message = ?2, processed_at = ?3 WHERE id = ?4",
-            params![status.to_string(), error_message, processed_at, id],
+        sqlx::query(
+            "UPDATE documents SET status = $1, error_message = $2, processed_at = $3 WHERE id = $4",
         )
+        .bind(status.to_string())
+        .bind(error_message)
+        .bind(processed_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await
         .context("Failed to update document status")?;
 
         Ok(())
     }
 
-    pub fn delete(&self, id: &str) -> Result<()> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        conn.execute("DELETE FROM documents WHERE id = ?1", params![id])
+    pub async fn find_all_ready(&self) -> Result<Vec<Document>> {
+        let rows = sqlx::query(
+            "SELECT id, user_id, filename, original_filename, minio_key, content_type,
+                    size_bytes, status, error_message,
+                    to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,
+                    to_char(processed_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS processed_at
+             FROM documents WHERE status = 'ready' ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list ready documents")?;
+
+        rows.iter().map(|r| Self::map_row(r)).collect()
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM documents WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
             .context("Failed to delete document")?;
+
         Ok(())
     }
 
-    fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
+    fn map_row(row: &sqlx::postgres::PgRow) -> Result<Document> {
+        let status_str: String = row.try_get("status").context("Failed to get status")?;
+        let status = DocumentStatus::try_from(status_str.as_str())?;
+
         Ok(Document {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            filename: row.get(2)?,
-            original_filename: row.get(3)?,
-            minio_key: row.get(4)?,
-            content_type: row.get(5)?,
-            size_bytes: row.get(6)?,
-            status: DocumentStatus::try_from(row.get::<_, String>(7)?.as_str()).unwrap(),
-            error_message: row.get(8)?,
-            created_at: row.get(9)?,
-            processed_at: row.get(10)?,
+            id: row.try_get("id").context("Failed to get id")?,
+            user_id: row.try_get("user_id").context("Failed to get user_id")?,
+            filename: row.try_get("filename").context("Failed to get filename")?,
+            original_filename: row
+                .try_get("original_filename")
+                .context("Failed to get original_filename")?,
+            minio_key: row.try_get("minio_key").context("Failed to get minio_key")?,
+            content_type: row
+                .try_get("content_type")
+                .context("Failed to get content_type")?,
+            size_bytes: row.try_get("size_bytes").context("Failed to get size_bytes")?,
+            status,
+            error_message: row.try_get("error_message").context("Failed to get error_message")?,
+            created_at: row.try_get("created_at").context("Failed to get created_at")?,
+            processed_at: row
+                .try_get("processed_at")
+                .context("Failed to get processed_at")?,
         })
-    }
-}
-
-trait OptionalRow {
-    fn optional(self) -> Result<Option<Document>, rusqlite::Error>;
-}
-
-impl OptionalRow for std::result::Result<Document, rusqlite::Error> {
-    fn optional(self) -> Result<Option<Document>, rusqlite::Error> {
-        match self {
-            Ok(doc) => Ok(Some(doc)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
     }
 }

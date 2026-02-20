@@ -1,7 +1,11 @@
 pub mod admin_config;
+pub mod audit_log;
 pub mod conversation;
 pub mod crawl_job;
 pub mod document;
+pub mod document_chunk;
+pub mod embed_key;
 pub mod invite;
 pub mod settings;
 pub mod user;
+pub mod widget_session;

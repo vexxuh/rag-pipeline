@@ -1,21 +1,22 @@
 use axum::{extract::State, Json};
+use axum::http::HeaderMap;
 
 use crate::dto::auth::{AuthResponse, LoginRequest, SetupRequest, UserResponse};
 use crate::errors::AppError;
-use crate::middleware::auth::Claims;
-use crate::services::auth_service;
+use crate::middleware::auth::{extract_ip, Claims};
+use crate::services::{audit, auth_service};
 use crate::state::AppState;
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
     let user = state
         .user_repo
-        .find_by_email(&payload.email)?
-        .ok_or_else(|| {
-            AppError::Validation("Invalid email or password".to_string())
-        })?;
+        .find_by_email(&payload.email)
+        .await?
+        .ok_or_else(|| AppError::Validation("Invalid email or password".to_string()))?;
 
     let valid = auth_service::verify_password(&payload.password, &user.password_hash)
         .map_err(AppError::Internal)?;
@@ -34,6 +35,18 @@ pub async fn login(
     )
     .map_err(AppError::Internal)?;
 
+    let ip = extract_ip(&headers);
+    audit::log(
+        &state.audit_log_repo,
+        Some(&user.id),
+        "auth.login",
+        None,
+        None,
+        &format!("User '{}' logged in", user.username),
+        ip.as_deref(),
+        None,
+    );
+
     Ok(Json(AuthResponse {
         token,
         user: user.into(),
@@ -42,13 +55,16 @@ pub async fn login(
 
 pub async fn setup(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<SetupRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
     validate_setup(&payload)?;
 
     let invite = state
         .invite_repo
-        .find_by_token(&payload.token)?
+        .find_by_token(&payload.token)
+        .await
+        .map_err(AppError::Internal)?
         .ok_or_else(|| AppError::Validation("Invalid invite token".to_string()))?;
 
     if invite.used {
@@ -64,7 +80,7 @@ pub async fn setup(
         return Err(AppError::Validation("This invite has expired".to_string()));
     }
 
-    if state.user_repo.find_by_email(&invite.email)?.is_some() {
+    if state.user_repo.find_by_email(&invite.email).await?.is_some() {
         return Err(AppError::Validation(
             "An account with this email already exists".to_string(),
         ));
@@ -76,9 +92,14 @@ pub async fn setup(
     let role = invite.role.clone();
     let user = state
         .user_repo
-        .create(&payload.username, &invite.email, &password_hash, &role)?;
+        .create(&payload.username, &invite.email, &password_hash, &role)
+        .await?;
 
-    state.invite_repo.mark_used(&payload.token)?;
+    state
+        .invite_repo
+        .mark_used(&payload.token)
+        .await
+        .map_err(AppError::Internal)?;
 
     let token = auth_service::generate_jwt(
         &user.id,
@@ -87,6 +108,18 @@ pub async fn setup(
         &state.config.auth,
     )
     .map_err(AppError::Internal)?;
+
+    let ip = extract_ip(&headers);
+    audit::log(
+        &state.audit_log_repo,
+        Some(&user.id),
+        "auth.setup",
+        None,
+        None,
+        &format!("User '{}' completed account setup", user.username),
+        ip.as_deref(),
+        None,
+    );
 
     Ok(Json(AuthResponse {
         token,
@@ -100,7 +133,8 @@ pub async fn me(
 ) -> Result<Json<UserResponse>, AppError> {
     let user = state
         .user_repo
-        .find_by_id(&claims.sub)?
+        .find_by_id(&claims.sub)
+        .await?
         .ok_or(AppError::NotFound("User not found".to_string()))?;
 
     Ok(Json(user.into()))

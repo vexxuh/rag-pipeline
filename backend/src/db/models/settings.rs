@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,135 +20,131 @@ pub struct LlmPreferences {
 
 #[derive(Clone)]
 pub struct SettingsRepository {
-    pool: Pool<SqliteConnectionManager>,
+    pool: PgPool,
 }
 
 impl SettingsRepository {
-    pub fn new(pool: Pool<SqliteConnectionManager>) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     // ── API Keys ──────────────────────────────────────────────
-    pub fn set_api_key(&self, user_id: &str, provider: &str, api_key: &str) -> Result<ApiKeyEntry> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
+    pub async fn set_api_key(
+        &self,
+        user_id: &str,
+        provider: &str,
+        api_key: &str,
+    ) -> Result<ApiKeyEntry> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
-        conn.execute(
+        let row = sqlx::query(
             "INSERT INTO user_api_keys (id, user_id, provider, api_key, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(user_id, provider) DO UPDATE SET api_key = ?4, id = ?1",
-            params![id, user_id, provider, api_key, now],
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(user_id, provider) DO UPDATE SET api_key = $4, id = $1
+             RETURNING id, provider, to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at",
         )
+        .bind(&id)
+        .bind(user_id)
+        .bind(provider)
+        .bind(api_key)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await
         .context("Failed to upsert API key")?;
 
         Ok(ApiKeyEntry {
-            id,
-            provider: provider.to_string(),
-            created_at: now,
+            id: row.get("id"),
+            provider: row.get("provider"),
+            created_at: row.get("created_at"),
         })
     }
 
-    pub fn get_api_key(&self, user_id: &str, provider: &str) -> Result<Option<String>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn.prepare(
-            "SELECT api_key FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
-        )?;
+    pub async fn get_api_key(&self, user_id: &str, provider: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT api_key FROM user_api_keys WHERE user_id = $1 AND provider = $2",
+        )
+        .bind(user_id)
+        .bind(provider)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to query API key")?;
 
-        let key = stmt
-            .query_row(params![user_id, provider], |row| row.get::<_, String>(0))
-            .optional()
-            .context("Failed to query API key")?;
-
-        Ok(key)
+        Ok(row.map(|r| r.get("api_key")))
     }
 
-    pub fn list_api_keys(&self, user_id: &str) -> Result<Vec<ApiKeyEntry>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn.prepare(
-            "SELECT id, provider, created_at FROM user_api_keys WHERE user_id = ?1 ORDER BY provider",
-        )?;
+    pub async fn list_api_keys(&self, user_id: &str) -> Result<Vec<ApiKeyEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, provider, to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at
+             FROM user_api_keys WHERE user_id = $1 ORDER BY provider",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list API keys")?;
 
-        let entries = stmt
-            .query_map(params![user_id], |row| {
-                Ok(ApiKeyEntry {
-                    id: row.get(0)?,
-                    provider: row.get(1)?,
-                    created_at: row.get(2)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context("Failed to collect API keys")?;
+        let entries = rows
+            .iter()
+            .map(|row| ApiKeyEntry {
+                id: row.get("id"),
+                provider: row.get("provider"),
+                created_at: row.get("created_at"),
+            })
+            .collect();
 
         Ok(entries)
     }
 
-    pub fn delete_api_key(&self, user_id: &str, provider: &str) -> Result<()> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        conn.execute(
-            "DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
-            params![user_id, provider],
-        )
-        .context("Failed to delete API key")?;
+    pub async fn delete_api_key(&self, user_id: &str, provider: &str) -> Result<()> {
+        sqlx::query("DELETE FROM user_api_keys WHERE user_id = $1 AND provider = $2")
+            .bind(user_id)
+            .bind(provider)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete API key")?;
+
         Ok(())
     }
 
     // ── LLM Preferences ──────────────────────────────────────
-    pub fn get_preferences(&self, user_id: &str) -> Result<Option<LlmPreferences>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn.prepare(
+    pub async fn get_preferences(&self, user_id: &str) -> Result<Option<LlmPreferences>> {
+        let row = sqlx::query(
             "SELECT preferred_provider, preferred_model, preferred_embedding_model, system_prompt
-             FROM user_llm_preferences WHERE user_id = ?1",
-        )?;
-
-        let prefs = stmt
-            .query_row(params![user_id], |row| {
-                Ok(LlmPreferences {
-                    preferred_provider: row.get(0)?,
-                    preferred_model: row.get(1)?,
-                    preferred_embedding_model: row.get(2)?,
-                    system_prompt: row.get(3)?,
-                })
-            })
-            .optional()
-            .context("Failed to query preferences")?;
-
-        Ok(prefs)
-    }
-
-    pub fn set_preferences(&self, user_id: &str, prefs: &LlmPreferences) -> Result<()> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        conn.execute(
-            "INSERT INTO user_llm_preferences (user_id, preferred_provider, preferred_model, preferred_embedding_model, system_prompt)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(user_id) DO UPDATE SET
-                preferred_provider = ?2,
-                preferred_model = ?3,
-                preferred_embedding_model = ?4,
-                system_prompt = ?5",
-            params![
-                user_id,
-                prefs.preferred_provider,
-                prefs.preferred_model,
-                prefs.preferred_embedding_model,
-                prefs.system_prompt,
-            ],
+             FROM user_llm_preferences WHERE user_id = $1",
         )
-        .context("Failed to upsert preferences")?;
-        Ok(())
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to query preferences")?;
+
+        Ok(row.map(|r| LlmPreferences {
+            preferred_provider: r.get("preferred_provider"),
+            preferred_model: r.get("preferred_model"),
+            preferred_embedding_model: r.get("preferred_embedding_model"),
+            system_prompt: r.get("system_prompt"),
+        }))
     }
-}
 
-trait OptionalRow<T> {
-    fn optional(self) -> Result<Option<T>, rusqlite::Error>;
-}
+    pub async fn set_preferences(&self, user_id: &str, prefs: &LlmPreferences) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_llm_preferences
+                 (user_id, preferred_provider, preferred_model, preferred_embedding_model, system_prompt)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(user_id) DO UPDATE SET
+                 preferred_provider      = $2,
+                 preferred_model         = $3,
+                 preferred_embedding_model = $4,
+                 system_prompt           = $5",
+        )
+        .bind(user_id)
+        .bind(&prefs.preferred_provider)
+        .bind(&prefs.preferred_model)
+        .bind(&prefs.preferred_embedding_model)
+        .bind(&prefs.system_prompt)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert preferences")?;
 
-impl<T> OptionalRow<T> for std::result::Result<T, rusqlite::Error> {
-    fn optional(self) -> Result<Option<T>, rusqlite::Error> {
-        match self {
-            Ok(val) => Ok(Some(val)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
+        Ok(())
     }
 }

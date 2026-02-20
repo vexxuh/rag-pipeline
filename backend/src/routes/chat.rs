@@ -12,7 +12,7 @@ use tokio_stream::StreamExt;
 use crate::db::models::conversation::{Conversation, Message};
 use crate::errors::AppError;
 use crate::middleware::auth::Claims;
-use crate::services::llm_provider;
+use crate::services::{audit, llm_provider};
 use crate::state::AppState;
 
 // ── Conversations CRUD ──────────────────────────────────────
@@ -32,7 +32,19 @@ pub async fn create_conversation(
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| "New Chat".to_string());
 
-    let conv = state.conversation_repo.create(&claims.sub, &title)?;
+    let conv = state.conversation_repo.create(&claims.sub, &title).await?;
+
+    audit::log(
+        &state.audit_log_repo,
+        Some(&claims.sub),
+        "chat.create",
+        Some("conversation"),
+        Some(&conv.id),
+        &format!("Created conversation '{}'", conv.title),
+        None,
+        None,
+    );
+
     Ok(Json(conv))
 }
 
@@ -40,7 +52,7 @@ pub async fn list_conversations(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<Vec<Conversation>>, AppError> {
-    let convs = state.conversation_repo.list_by_user(&claims.sub)?;
+    let convs = state.conversation_repo.list_by_user(&claims.sub).await?;
     Ok(Json(convs))
 }
 
@@ -58,10 +70,11 @@ pub async fn get_conversation(
 ) -> Result<Json<ConversationWithMessages>, AppError> {
     let conv = state
         .conversation_repo
-        .get(&id, &claims.sub)?
+        .get(&id, &claims.sub)
+        .await?
         .ok_or_else(|| AppError::NotFound("Conversation not found".to_string()))?;
 
-    let messages = state.conversation_repo.get_messages(&id)?;
+    let messages = state.conversation_repo.get_messages(&id).await?;
 
     Ok(Json(ConversationWithMessages {
         conversation: conv,
@@ -74,7 +87,19 @@ pub async fn delete_conversation(
     claims: Claims,
     Path(id): Path<String>,
 ) -> Result<(), AppError> {
-    state.conversation_repo.delete(&id, &claims.sub)?;
+    state.conversation_repo.soft_delete(&id, &claims.sub).await?;
+
+    audit::log(
+        &state.audit_log_repo,
+        Some(&claims.sub),
+        "chat.delete",
+        Some("conversation"),
+        Some(&id),
+        "Deleted conversation",
+        None,
+        None,
+    );
+
     Ok(())
 }
 
@@ -98,22 +123,38 @@ pub async fn send_message(
     // Verify conversation belongs to user
     let conv = state
         .conversation_repo
-        .get(&conversation_id, &claims.sub)?
+        .get(&conversation_id, &claims.sub)
+        .await?
         .ok_or_else(|| AppError::NotFound("Conversation not found".to_string()))?;
 
     // Persist user message
     state
         .conversation_repo
-        .add_message(&conversation_id, "user", &payload.message)?;
+        .add_message(&conversation_id, "user", &payload.message)
+        .await?;
+
+    audit::log(
+        &state.audit_log_repo,
+        Some(&claims.sub),
+        "chat.message",
+        Some("conversation"),
+        Some(&conversation_id),
+        "Sent chat message",
+        None,
+        None,
+    );
 
     // Auto-title on first message
     if conv.title == "New Chat" {
         let title: String = payload.message.chars().take(50).collect();
-        let _ = state.conversation_repo.update_title(&conversation_id, &title);
+        let _ = state
+            .conversation_repo
+            .update_title(&conversation_id, &title)
+            .await;
     }
 
     // Resolve provider/model from user preferences
-    let prefs = state.settings_repo.get_preferences(&claims.sub)?;
+    let prefs = state.settings_repo.get_preferences(&claims.sub).await?;
 
     let provider_name = prefs
         .as_ref()
@@ -134,12 +175,74 @@ pub async fn send_message(
     // Get API key
     let api_key = state
         .settings_repo
-        .get_api_key(&claims.sub, &provider_name)?
+        .get_api_key(&claims.sub, &provider_name)
+        .await?
         .ok_or_else(|| {
             AppError::Validation(format!(
                 "No API key configured for provider '{provider_name}'. Add one in Settings."
             ))
         })?;
+
+    // RAG context retrieval: embed the user's message and search for relevant chunks
+    let mut rag_context = String::new();
+
+    let embedding_provider = prefs
+        .as_ref()
+        .map(|p| p.preferred_provider.clone())
+        .unwrap_or_else(|| state.config.llm.default_provider.clone());
+    let embedding_model_name = prefs
+        .as_ref()
+        .map(|p| p.preferred_embedding_model.clone())
+        .unwrap_or_else(|| state.config.llm.default_embedding_model.clone());
+
+    let embedding_api_key = state
+        .settings_repo
+        .get_api_key(&claims.sub, &embedding_provider)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(ref emb_key) = embedding_api_key {
+        if let Ok(emb_client) =
+            llm_provider::create_embeddings_client(&embedding_provider, emb_key)
+        {
+            let emb_model = rig::client::embeddings::EmbeddingsClientDyn::embedding_model(
+                emb_client.as_ref(),
+                &embedding_model_name,
+            );
+
+            match emb_model.embed_text(&payload.message).await {
+                Ok(query_embedding) => {
+                    match state.vector_service.search(query_embedding.vec, 5).await {
+                        Ok(results) if !results.is_empty() => {
+                            let context_parts: Vec<String> = results
+                                .iter()
+                                .filter(|r| !r.content.is_empty())
+                                .map(|r| r.content.clone())
+                                .collect();
+
+                            if !context_parts.is_empty() {
+                                rag_context = format!(
+                                    "\n\nUse the following context from the knowledge base to help answer the user's question. If the context is not relevant, you may ignore it.\n\n---\n{}\n---\n",
+                                    context_parts.join("\n\n")
+                                );
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!("RAG search failed: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to embed query for RAG: {e}");
+                }
+            }
+        }
+    }
+
+    // Build final system prompt with RAG context
+    let final_system_prompt = format!("{system_prompt}{rag_context}");
 
     // Create completion client via rig
     let completion_client =
@@ -148,7 +251,7 @@ pub async fn send_message(
 
     let agent = completion_client
         .agent(&model_name)
-        .preamble(&system_prompt)
+        .preamble(&final_system_prompt)
         .build();
 
     let message = payload.message.clone();
@@ -162,10 +265,11 @@ pub async fn send_message(
     // Persist assistant message
     state
         .conversation_repo
-        .add_message(&conversation_id, "assistant", &response)?;
+        .add_message(&conversation_id, "assistant", &response)
+        .await?;
 
     // Update conversation timestamp
-    let _ = state.conversation_repo.touch(&conversation_id);
+    let _ = state.conversation_repo.touch(&conversation_id).await;
 
     // Stream response as SSE
     let words: Vec<String> = response

@@ -16,7 +16,7 @@ from_email = "noreply@yourdomain.com"
 frontend_url = "http://localhost:5173"
 
 [database]
-path = "./data/rag.db"
+url = "postgres://rag:rag@localhost:5432/rag"
 max_connections = 5
 
 [minio]
@@ -28,7 +28,7 @@ bucket_name = "rag-documents"
 use_ssl = false
 
 [qdrant]
-url = "http://localhost:6333"
+url = "http://localhost:6334"
 collection_name = "rag_vectors"
 vector_size = 1536
 
@@ -43,6 +43,11 @@ auth_enabled = true
 pdf_upload_enabled = true
 web_crawl_enabled = true
 admin_panel_enabled = true
+widget_enabled = true
+
+[widget]
+enabled = true
+default_rate_limit = 20
 
 [crawler]
 max_concurrent = 5

@@ -73,3 +73,45 @@ fn validate_token(
     )?;
     Ok(token_data.claims)
 }
+
+// ── Role-based access helpers ────────────────────────────────
+
+use crate::db::models::user::UserRole;
+use crate::errors::AppError;
+
+impl Claims {
+    pub fn parsed_role(&self) -> Result<UserRole, AppError> {
+        UserRole::try_from(self.role.as_str()).map_err(|_| AppError::Forbidden)
+    }
+}
+
+pub fn require_role(claims: &Claims, minimum: UserRole) -> Result<(), AppError> {
+    let user_role = claims.parsed_role()?;
+    if user_role.is_at_least(&minimum) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+pub fn require_admin(claims: &Claims) -> Result<(), AppError> {
+    require_role(claims, UserRole::Admin)
+}
+
+pub fn require_maintainer(claims: &Claims) -> Result<(), AppError> {
+    require_role(claims, UserRole::Maintainer)
+}
+
+pub fn extract_ip(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+        })
+}

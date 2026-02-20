@@ -10,16 +10,15 @@ axum = { version = "0.8.6", features = ["macros", "multipart"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 tokio = { version = "1.49.0", features = ["full"] }
 tower = { version = "0.5.3", features = ["timeout"] }
-tower-http = { version = "0.6.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6.6", features = ["cors", "trace", "fs"] }
 
 # LLM & RAG
 rig-core = "0.23.1"
 rig-qdrant = "0.1.17"
+qdrant-client = "1.17.0"
 
 # Database
-rusqlite = { version = "0.37.0", features = ["bundled"] }
-r2d2 = "0.8.10"
-r2d2_sqlite = "0.31.0"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono"] }
 
 # MinIO / S3 client
 aws-sdk-s3 = "1.124.0"
@@ -44,6 +43,10 @@ scraper = "0.25.0"
 
 # PDF processing
 pdf-extract = "0.10.0"
+
+# Crypto
+sha2 = "0.10"
+rand = "0.9"
 
 # Utilities
 anyhow = "1.0.100"

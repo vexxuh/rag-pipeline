@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
 use serde::Serialize;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::user::UserRole;
@@ -21,36 +19,42 @@ pub struct Invite {
 
 #[derive(Clone)]
 pub struct InviteRepository {
-    pool: Pool<SqliteConnectionManager>,
+    pool: PgPool,
 }
 
 impl InviteRepository {
-    pub fn new(pool: Pool<SqliteConnectionManager>) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
-    pub fn create(
+    pub async fn create(
         &self,
         email: &str,
         role: &UserRole,
         invited_by: &str,
         expires_hours: i64,
     ) -> Result<Invite> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
         let id = Uuid::new_v4().to_string();
         let token = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let expires_at = now
             .checked_add_signed(chrono::Duration::hours(expires_hours))
-            .unwrap_or(now)
-            .to_rfc3339();
-        let created_at = now.to_rfc3339();
+            .unwrap_or(now);
+        let created_at = now;
 
-        conn.execute(
+        sqlx::query(
             "INSERT INTO user_invites (id, email, token, role, invited_by, used, expires_at, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
-            params![id, email, token, role.to_string(), invited_by, expires_at, created_at],
+             VALUES ($1, $2, $3, $4, $5, false, $6, $7)",
         )
+        .bind(&id)
+        .bind(email)
+        .bind(&token)
+        .bind(role.to_string())
+        .bind(invited_by)
+        .bind(expires_at)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await
         .context("Failed to create invite")?;
 
         Ok(Invite {
@@ -60,91 +64,81 @@ impl InviteRepository {
             role: role.clone(),
             invited_by: invited_by.to_string(),
             used: false,
-            expires_at,
-            created_at,
+            expires_at: expires_at.to_rfc3339(),
+            created_at: created_at.to_rfc3339(),
         })
     }
 
-    pub fn find_by_token(&self, token: &str) -> Result<Option<Invite>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, email, token, role, invited_by, used, expires_at, created_at
-                 FROM user_invites WHERE token = ?1",
-            )
-            .context("Failed to prepare query")?;
+    pub async fn find_by_token(&self, token: &str) -> Result<Option<Invite>> {
+        let row = sqlx::query(
+            "SELECT id, email, token, role, invited_by, used,
+                    to_char(expires_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS expires_at,
+                    to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at
+             FROM user_invites WHERE token = $1",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to query invite by token")?;
 
-        let invite = stmt
-            .query_row(params![token], |row| {
+        let invite = row
+            .map(|r| -> Result<Invite> {
+                let role_str: String = r.get("role");
                 Ok(Invite {
-                    id: row.get(0)?,
-                    email: row.get(1)?,
-                    token: row.get(2)?,
-                    role: UserRole::try_from(row.get::<_, String>(3)?.as_str()).unwrap(),
-                    invited_by: row.get(4)?,
-                    used: row.get::<_, i32>(5)? != 0,
-                    expires_at: row.get(6)?,
-                    created_at: row.get(7)?,
+                    id: r.get("id"),
+                    email: r.get("email"),
+                    token: r.get("token"),
+                    role: UserRole::try_from(role_str.as_str())
+                        .map_err(|e| anyhow::anyhow!("Invalid role: {e}"))?,
+                    invited_by: r.get("invited_by"),
+                    used: r.get::<bool, _>("used"),
+                    expires_at: r.get("expires_at"),
+                    created_at: r.get("created_at"),
                 })
             })
-            .optional();
+            .transpose()?;
 
-        match invite {
-            Ok(i) => Ok(i),
-            Err(e) => Err(anyhow::anyhow!("Query error: {e}")),
-        }
+        Ok(invite)
     }
 
-    pub fn mark_used(&self, token: &str) -> Result<()> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        conn.execute(
-            "UPDATE user_invites SET used = 1 WHERE token = ?1",
-            params![token],
-        )
-        .context("Failed to mark invite as used")?;
+    pub async fn mark_used(&self, token: &str) -> Result<()> {
+        sqlx::query("UPDATE user_invites SET used = TRUE WHERE token = $1")
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .context("Failed to mark invite as used")?;
         Ok(())
     }
 
-    pub fn find_all(&self) -> Result<Vec<Invite>> {
-        let conn = self.pool.get().context("Failed to get db connection")?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, email, token, role, invited_by, used, expires_at, created_at
-                 FROM user_invites ORDER BY created_at DESC",
-            )
-            .context("Failed to prepare query")?;
+    pub async fn find_all(&self) -> Result<Vec<Invite>> {
+        let rows = sqlx::query(
+            "SELECT id, email, token, role, invited_by, used,
+                    to_char(expires_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS expires_at,
+                    to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at
+             FROM user_invites ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to query invites")?;
 
-        let invites = stmt
-            .query_map([], |row| {
+        let invites = rows
+            .into_iter()
+            .map(|r| {
+                let role_str: String = r.get("role");
                 Ok(Invite {
-                    id: row.get(0)?,
-                    email: row.get(1)?,
-                    token: row.get(2)?,
-                    role: UserRole::try_from(row.get::<_, String>(3)?.as_str()).unwrap(),
-                    invited_by: row.get(4)?,
-                    used: row.get::<_, i32>(5)? != 0,
-                    expires_at: row.get(6)?,
-                    created_at: row.get(7)?,
+                    id: r.get("id"),
+                    email: r.get("email"),
+                    token: r.get("token"),
+                    role: UserRole::try_from(role_str.as_str())
+                        .map_err(|e| anyhow::anyhow!("Invalid role: {e}"))?,
+                    invited_by: r.get("invited_by"),
+                    used: r.get::<bool, _>("used"),
+                    expires_at: r.get("expires_at"),
+                    created_at: r.get("created_at"),
                 })
             })
-            .context("Failed to query invites")?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context("Failed to collect invites")?;
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(invites)
-    }
-}
-
-trait OptionalRow {
-    fn optional(self) -> Result<Option<Invite>, rusqlite::Error>;
-}
-
-impl OptionalRow for std::result::Result<Invite, rusqlite::Error> {
-    fn optional(self) -> Result<Option<Invite>, rusqlite::Error> {
-        match self {
-            Ok(invite) => Ok(Some(invite)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
     }
 }

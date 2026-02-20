@@ -11,12 +11,17 @@
 	let sidebarOpen = $state(false);
 	let currentUser: User | null = $state(null);
 
-	const navItems = [
-		{ href: '/chat', label: 'Chat', icon: 'C' },
-		{ href: '/documents', label: 'Documents', icon: 'D' },
-		{ href: '/crawl', label: 'Web Crawl', icon: 'W' },
-		{ href: '/settings', label: 'Settings', icon: 'S' }
+	const allNavItems = [
+		{ href: '/chat', label: 'Chat', icon: 'C', minRole: 'user' as const },
+		{ href: '/documents', label: 'Documents', icon: 'D', minRole: 'maintainer' as const },
+		{ href: '/crawl', label: 'Web Crawl', icon: 'W', minRole: 'maintainer' as const }
 	];
+
+	const roleLevels: Record<string, number> = { user: 0, maintainer: 1, admin: 2 };
+
+	let navItems = $derived(
+		allNavItems.filter((item) => (roleLevels[currentUser?.role ?? ''] ?? -1) >= roleLevels[item.minRole])
+	);
 
 	onMount(() => {
 		const unsub = authStore.subscribe((state) => {
@@ -127,6 +132,7 @@
 				<button
 					onclick={() => (sidebarOpen = !sidebarOpen)}
 					class="rounded-md p-2 text-muted-foreground hover:bg-accent"
+					aria-label="Toggle sidebar"
 				>
 					<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path

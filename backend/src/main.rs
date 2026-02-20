@@ -4,7 +4,9 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use axum::http::HeaderName;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -12,9 +14,11 @@ use rag_backend::config::AppConfig;
 use rag_backend::db::models::user::UserRole;
 use rag_backend::db::{connection, migrations};
 use rag_backend::middleware::auth::auth_middleware;
-use rag_backend::routes::{admin, admin_config, auth, chat, crawl, documents, health, settings};
+use rag_backend::middleware::embed_auth::embed_auth_middleware;
+use rag_backend::routes::{admin, admin_audit, admin_config, admin_embed, admin_logs, auth, chat, crawl, documents, health, settings, widget};
 use rag_backend::services::auth_service;
 use rag_backend::services::storage::StorageService;
+use rag_backend::services::vector::VectorService;
 use rag_backend::state::AppState;
 
 #[tokio::main]
@@ -29,36 +33,68 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("RUN_ENV").unwrap_or_else(|_| "development".into())
     );
 
-    let db_pool =
-        connection::create_pool(&config.database).context("Failed to create database pool")?;
+    let db_pool = connection::create_pool(&config.database)
+        .await
+        .context("Failed to create database pool")?;
 
-    {
-        let conn = db_pool
-            .get()
-            .context("Failed to get connection for migrations")?;
-        migrations::run_all(&conn).context("Failed to run migrations")?;
-    }
+    migrations::run_all(&db_pool)
+        .await
+        .context("Failed to run migrations")?;
 
     let storage = StorageService::new(&config.minio)
         .await
         .context("Failed to initialize MinIO storage")?;
     tracing::info!("MinIO storage initialized");
 
-    let state = AppState::new(config.clone(), db_pool, storage);
+    let vector_service = VectorService::new(&config.qdrant)
+        .await
+        .context("Failed to initialize Qdrant vector service")?;
+    tracing::info!("Qdrant vector service initialized");
+
+    let state = AppState::new(config.clone(), db_pool, storage, vector_service);
 
     // Seed admin account on first boot
-    seed_admin(&state)?;
+    seed_admin(&state).await?;
+
+    // Seed widget system user for anonymous widget conversations
+    seed_widget_user(&state).await?;
 
     // Seed default provider/model catalogue
     state
         .admin_config_repo
         .seed_defaults()
+        .await
         .context("Failed to seed admin config defaults")?;
+
+    // Spawn background task to purge soft-deleted conversations older than 30 days
+    {
+        let conversation_repo = state.conversation_repo.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+            loop {
+                interval.tick().await;
+                match conversation_repo.hard_delete_expired().await {
+                    Ok(count) if count > 0 => {
+                        tracing::info!("Purged {count} expired soft-deleted conversations");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("Failed to purge expired conversations: {e}");
+                    }
+                }
+            }
+        });
+    }
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            HeaderName::from_static("x-embed-key"),
+            HeaderName::from_static("x-session-id"),
+        ]);
 
     let public_routes = Router::new()
         .route("/api/health", get(health::health_check))
@@ -82,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/documents", get(documents::list))
         .route("/api/documents/{id}", get(documents::get_document))
         .route("/api/documents/{id}", delete(documents::delete_document))
+        .route("/api/documents/rescan", post(documents::rescan))
         // Crawl
         .route("/api/crawl", post(crawl::start_crawl))
         .route("/api/crawl", get(crawl::list_crawl_jobs))
@@ -118,6 +155,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/admin/invites", post(admin::invite_user))
         .route("/api/admin/invites", get(admin::list_invites))
+        // Admin — Logs
+        .route("/api/admin/logs", get(admin_logs::list_conversation_logs))
+        .route(
+            "/api/admin/logs/{id}",
+            get(admin_logs::get_conversation_log),
+        )
         // Admin — Provider / model config
         .route(
             "/api/admin/config/providers",
@@ -143,14 +186,63 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/config/models/{model_id}/default",
             put(admin_config::set_default_model),
         )
+        // Admin — Audit logs
+        .route(
+            "/api/admin/audit-logs",
+            get(admin_audit::list_audit_logs),
+        )
+        // Admin — Embed keys
+        .route("/api/admin/embed-keys", post(admin_embed::create_key))
+        .route("/api/admin/embed-keys", get(admin_embed::list_keys))
+        .route(
+            "/api/admin/embed-keys/{id}",
+            get(admin_embed::get_key),
+        )
+        .route(
+            "/api/admin/embed-keys/{id}",
+            put(admin_embed::update_key),
+        )
+        .route(
+            "/api/admin/embed-keys/{id}",
+            delete(admin_embed::delete_key),
+        )
+        .route(
+            "/api/admin/embed-keys/{id}/toggle",
+            put(admin_embed::toggle_key),
+        )
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ));
 
+    let widget_routes = Router::new()
+        .route("/api/widget/config", get(widget::get_config))
+        .route(
+            "/api/widget/conversations",
+            post(widget::create_conversation),
+        )
+        .route(
+            "/api/widget/conversations",
+            get(widget::list_conversations),
+        )
+        .route(
+            "/api/widget/conversations/{id}/messages",
+            get(widget::get_messages),
+        )
+        .route(
+            "/api/widget/conversations/{id}/messages",
+            post(widget::send_message),
+        )
+        .layer(axum_mw::from_fn_with_state(
+            state.clone(),
+            embed_auth_middleware,
+        ));
+
     let app = Router::new()
         .merge(public_routes)
+        .merge(widget_routes)
         .merge(protected_routes)
+        .nest_service("/static", ServeDir::new("static"))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -169,20 +261,37 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn seed_admin(state: &AppState) -> anyhow::Result<()> {
-    if state.user_repo.count()? > 0 {
+async fn seed_widget_user(state: &AppState) -> anyhow::Result<()> {
+    // Create a system user for widget conversations (satisfies FK constraint)
+    sqlx::query(
+        "INSERT INTO users (id, username, email, password_hash, role)
+         VALUES ('__widget__', 'widget', 'widget@system.internal', '__no_login__', 'user')
+         ON CONFLICT (id) DO NOTHING"
+    )
+    .execute(&state.db)
+    .await
+    .context("Failed to seed widget user")?;
+
+    Ok(())
+}
+
+async fn seed_admin(state: &AppState) -> anyhow::Result<()> {
+    if state.user_repo.count().await? > 0 {
         return Ok(());
     }
 
     let password_hash = auth_service::hash_password(&state.config.auth.admin_password)
         .context("Failed to hash admin password")?;
 
-    state.user_repo.create(
-        &state.config.auth.admin_username,
-        &state.config.auth.admin_email,
-        &password_hash,
-        &UserRole::Admin,
-    )?;
+    state
+        .user_repo
+        .create(
+            &state.config.auth.admin_username,
+            &state.config.auth.admin_email,
+            &password_hash,
+            &UserRole::Admin,
+        )
+        .await?;
 
     tracing::info!(
         "Admin account seeded: {} ({})",
