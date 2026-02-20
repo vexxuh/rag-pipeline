@@ -5,6 +5,7 @@ use serde::Deserialize;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
+    pub resend: ResendConfig,
     pub database: DatabaseConfig,
     pub minio: MinioConfig,
     pub qdrant: QdrantConfig,
@@ -24,6 +25,16 @@ pub struct AuthConfig {
     pub enabled: bool,
     pub jwt_secret: String,
     pub jwt_expiry_hours: i64,
+    pub admin_email: String,
+    pub admin_password: String,
+    pub admin_username: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ResendConfig {
+    pub api_key: String,
+    pub from_email: String,
+    pub frontend_url: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -54,6 +65,7 @@ pub struct LlmConfig {
     pub default_provider: String,
     pub default_model: String,
     pub default_embedding_model: String,
+    pub default_system_prompt: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -91,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_default_config_loads() {
-        std::env::set_var("RUN_ENV", "development");
+        unsafe { std::env::set_var("RUN_ENV", "development") };
         let config = AppConfig::load();
         assert!(config.is_ok(), "Default config should load: {config:?}");
 
@@ -103,12 +115,12 @@ mod tests {
 
     #[test]
     fn test_env_override() {
-        std::env::set_var("APP__SERVER__PORT", "8080");
-        std::env::set_var("RUN_ENV", "development");
+        unsafe { std::env::set_var("APP__SERVER__PORT", "8080") };
+        unsafe { std::env::set_var("RUN_ENV", "development") };
 
         let config = AppConfig::load().unwrap();
         assert_eq!(config.server.port, 8080);
 
-        std::env::remove_var("APP__SERVER__PORT");
+        unsafe { std::env::remove_var("APP__SERVER__PORT") };
     }
 }

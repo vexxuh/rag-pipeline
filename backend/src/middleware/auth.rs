@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Request, State},
-    http::{header, StatusCode},
+    extract::{FromRequestParts, Request, State},
+    http::{header, StatusCode, request::Parts},
     middleware::Next,
     response::Response,
 };
@@ -17,12 +17,32 @@ pub struct Claims {
     pub exp: usize,
 }
 
+impl<S: Send + Sync> FromRequestParts<S> for Claims {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<Claims>()
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)
+    }
+}
+
 pub async fn auth_middleware(
     State(state): State<AppState>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     if !state.config.auth.enabled {
+        // When auth is disabled, inject a default admin claims
+        let default_claims = Claims {
+            sub: "anonymous".to_string(),
+            username: "anonymous".to_string(),
+            role: "admin".to_string(),
+            exp: usize::MAX,
+        };
+        req.extensions_mut().insert(default_claims);
         return Ok(next.run(req).await);
     }
 

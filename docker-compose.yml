@@ -57,6 +57,12 @@ services:
       APP__MINIO__BUCKET_NAME: "rag-documents"
       APP__QDRANT__URL: "http://qdrant:6333"
       APP__AUTH__JWT_SECRET: "dev-secret-change-me-in-production-min-32-chars"
+      APP__AUTH__ADMIN_EMAIL: "admin@example.com"
+      APP__AUTH__ADMIN_PASSWORD: "changeme123!"
+      APP__AUTH__ADMIN_USERNAME: "admin"
+      APP__RESEND__API_KEY: "${RESEND_API_KEY:-}"
+      APP__RESEND__FROM_EMAIL: "${RESEND_FROM_EMAIL:-noreply@yourdomain.com}"
+      APP__RESEND__FRONTEND_URL: "http://localhost:5173"
     volumes:
       - backend_data:/app/data
 

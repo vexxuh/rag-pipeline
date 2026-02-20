@@ -1,6 +1,18 @@
+<script lang="ts">
+	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
+
+	onMount(() => {
+		const token = localStorage.getItem('auth_token');
+		if (!token) {
+			goto('/login');
+		} else {
+			goto('/chat');
+		}
+	});
+</script>
+
 <div class="flex h-screen items-center justify-center">
-	<div class="text-center">
-		<h1 class="mb-4 text-4xl font-bold">RAG Pipeline</h1>
-		<p class="text-muted-foreground">Chat interface coming in Phase 7</p>
+	<div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent">
 	</div>
 </div>
