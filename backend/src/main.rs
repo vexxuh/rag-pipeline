@@ -1,5 +1,6 @@
 use anyhow::Context;
 use axum::{
+    extract::DefaultBodyLimit,
     middleware as axum_mw,
     routing::{delete, get, post, put},
     Router,
@@ -116,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         // Documents
         .route("/api/documents", post(documents::upload))
         .route("/api/documents", get(documents::list))
+        .route("/api/documents/limits", get(documents::upload_limits))
         .route("/api/documents/{id}", get(documents::get_document))
         .route("/api/documents/{id}", delete(documents::delete_document))
         .route("/api/documents/rescan", post(documents::rescan))
@@ -238,11 +240,29 @@ async fn main() -> anyhow::Result<()> {
             embed_auth_middleware,
         ));
 
-    let app = Router::new()
+    #[allow(unused_mut)]
+    let mut app = Router::new()
         .merge(public_routes)
         .merge(widget_routes)
         .merge(protected_routes)
-        .nest_service("/static", ServeDir::new("static"))
+        .nest_service("/static", ServeDir::new("static"));
+
+    #[cfg(feature = "openapi")]
+    {
+        use utoipa::OpenApi;
+        use utoipa_redoc::{Redoc, Servable};
+        let openapi = rag_backend::openapi::ApiDoc::openapi();
+        app = app
+            .merge(Redoc::with_url("/api/docs", openapi.clone()))
+            .route("/api/openapi.json", get({
+                let spec = openapi;
+                move || async move { axum::Json(spec) }
+            }));
+        tracing::info!("OpenAPI docs available at /api/docs");
+    }
+
+    let app = app
+        .layer(DefaultBodyLimit::max(config.server.max_upload_size_mb * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

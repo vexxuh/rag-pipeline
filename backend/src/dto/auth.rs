@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 use crate::db::models::user::{User, UserRole};
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SetupRequest {
     pub token: String,
     pub username: String,
@@ -16,18 +18,21 @@ pub struct SetupRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct InviteRequest {
     pub email: String,
     pub role: UserRole,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AuthResponse {
     pub token: String,
     pub user: UserResponse,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UserResponse {
     pub id: String,
     pub username: String,
@@ -51,11 +56,13 @@ impl From<User> for UserResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateRoleRequest {
     pub role: UserRole,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct InviteResponse {
     pub id: String,
     pub email: String,

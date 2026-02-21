@@ -16,12 +16,14 @@ use crate::services::{audit, llm_provider};
 use crate::state::AppState;
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WidgetConfigResponse {
     pub widget_title: String,
     pub primary_color: String,
     pub greeting_message: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/widget/config", tag = "Widget", security(("embed_key" = [])), responses((status = 200, body = WidgetConfigResponse))))]
 pub async fn get_config(
     State(state): State<AppState>,
     ctx: EmbedContext,
@@ -38,10 +40,12 @@ pub async fn get_config(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateWidgetConversationRequest {
     pub title: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/widget/conversations", tag = "Widget", security(("embed_key" = [])), request_body = CreateWidgetConversationRequest, responses((status = 200, body = Conversation))))]
 pub async fn create_conversation(
     State(state): State<AppState>,
     ctx: EmbedContext,
@@ -77,6 +81,7 @@ pub async fn create_conversation(
     Ok(Json(conv))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/widget/conversations", tag = "Widget", security(("embed_key" = [])), responses((status = 200, body = Vec<Conversation>))))]
 pub async fn list_conversations(
     State(state): State<AppState>,
     ctx: EmbedContext,
@@ -93,6 +98,7 @@ pub async fn list_conversations(
     Ok(Json(convs))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/widget/conversations/{id}/messages", tag = "Widget", security(("embed_key" = [])), params(("id" = String, Path, description = "Conversation ID")), responses((status = 200, body = Vec<Message>))))]
 pub async fn get_messages(
     State(state): State<AppState>,
     ctx: EmbedContext,
@@ -118,10 +124,12 @@ pub async fn get_messages(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WidgetSendMessageRequest {
     pub message: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/widget/conversations/{id}/messages", tag = "Widget", security(("embed_key" = [])), params(("id" = String, Path, description = "Conversation ID")), request_body = WidgetSendMessageRequest, responses((status = 200, description = "SSE stream of assistant response"))))]
 pub async fn send_message(
     State(state): State<AppState>,
     ctx: EmbedContext,

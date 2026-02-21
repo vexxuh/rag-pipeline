@@ -13,6 +13,7 @@ use crate::services::audit;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateEmbedKeyRequest {
     pub name: String,
     #[serde(default)]
@@ -45,11 +46,13 @@ fn default_greeting() -> String {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateEmbedKeyResponse {
     pub embed_key: EmbedKey,
     pub raw_key: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/admin/embed-keys", tag = "Admin - Embed", security(("bearer_auth" = [])), request_body = CreateEmbedKeyRequest, responses((status = 200, body = CreateEmbedKeyResponse))))]
 pub async fn create_key(
     State(state): State<AppState>,
     claims: Claims,
@@ -119,6 +122,7 @@ pub async fn create_key(
     }))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/embed-keys", tag = "Admin - Embed", security(("bearer_auth" = [])), responses((status = 200, body = Vec<EmbedKey>))))]
 pub async fn list_keys(
     State(state): State<AppState>,
     claims: Claims,
@@ -128,6 +132,7 @@ pub async fn list_keys(
     Ok(Json(keys))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/embed-keys/{id}", tag = "Admin - Embed", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Embed key ID")), responses((status = 200, body = EmbedKey))))]
 pub async fn get_key(
     State(state): State<AppState>,
     claims: Claims,
@@ -142,6 +147,7 @@ pub async fn get_key(
     Ok(Json(key))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/admin/embed-keys/{id}", tag = "Admin - Embed", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Embed key ID")), request_body = UpdateEmbedKeyRequest, responses((status = 200, body = EmbedKey))))]
 pub async fn update_key(
     State(state): State<AppState>,
     claims: Claims,
@@ -170,6 +176,7 @@ pub async fn update_key(
     Ok(Json(key))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/admin/embed-keys/{id}", tag = "Admin - Embed", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Embed key ID")), responses((status = 200))))]
 pub async fn delete_key(
     State(state): State<AppState>,
     claims: Claims,
@@ -193,6 +200,7 @@ pub async fn delete_key(
     Ok(())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/admin/embed-keys/{id}/toggle", tag = "Admin - Embed", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Embed key ID")), responses((status = 200, body = EmbedKey))))]
 pub async fn toggle_key(
     State(state): State<AppState>,
     claims: Claims,

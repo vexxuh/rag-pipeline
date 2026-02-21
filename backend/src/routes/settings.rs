@@ -12,6 +12,7 @@ use crate::services::audit;
 use crate::state::AppState;
 
 // ── Providers (user-facing, only admin-enabled) ─────────────
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/settings/providers", tag = "Settings", security(("bearer_auth" = [])), responses((status = 200, body = Vec<AdminProvider>))))]
 pub async fn list_providers(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<AdminProvider>>, AppError> {
@@ -19,6 +20,7 @@ pub async fn list_providers(
     Ok(Json(providers))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/settings/providers/{provider_id}/models", tag = "Settings", security(("bearer_auth" = [])), params(("provider_id" = String, Path, description = "Provider ID")), responses((status = 200, body = Vec<AdminModel>))))]
 pub async fn list_models_for_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -29,10 +31,12 @@ pub async fn list_models_for_provider(
 
 // ── API Keys ─────────────────────────────────────────────────
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SetApiKeyRequest {
     pub api_key: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/settings/api-keys", tag = "Settings", security(("bearer_auth" = [])), responses((status = 200, body = Vec<ApiKeyEntry>))))]
 pub async fn list_api_keys(
     State(state): State<AppState>,
     claims: Claims,
@@ -41,6 +45,7 @@ pub async fn list_api_keys(
     Ok(Json(keys))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/settings/api-keys/{provider}", tag = "Settings", security(("bearer_auth" = [])), params(("provider" = String, Path, description = "Provider name")), request_body = SetApiKeyRequest, responses((status = 200, body = ApiKeyEntry))))]
 pub async fn set_api_key(
     State(state): State<AppState>,
     claims: Claims,
@@ -69,6 +74,7 @@ pub async fn set_api_key(
     Ok(Json(entry))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/settings/api-keys/{provider}", tag = "Settings", security(("bearer_auth" = [])), params(("provider" = String, Path, description = "Provider name")), responses((status = 200))))]
 pub async fn delete_api_key(
     State(state): State<AppState>,
     claims: Claims,
@@ -91,6 +97,7 @@ pub async fn delete_api_key(
 }
 
 // ── LLM Preferences ─────────────────────────────────────────
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/settings/preferences", tag = "Settings", security(("bearer_auth" = [])), responses((status = 200, body = LlmPreferences))))]
 pub async fn get_preferences(
     State(state): State<AppState>,
     claims: Claims,
@@ -108,6 +115,7 @@ pub async fn get_preferences(
     Ok(Json(prefs))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/settings/preferences", tag = "Settings", security(("bearer_auth" = [])), request_body = LlmPreferences, responses((status = 200, body = LlmPreferences))))]
 pub async fn update_preferences(
     State(state): State<AppState>,
     claims: Claims,

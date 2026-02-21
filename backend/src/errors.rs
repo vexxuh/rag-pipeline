@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("Feature disabled: {0}")]
     FeatureDisabled(String),
 
+    #[error("File too large. Maximum upload size is {0} MB")]
+    PayloadTooLarge(usize),
+
     #[error("Rate limit exceeded")]
     RateLimited,
 
@@ -27,7 +30,8 @@ pub enum AppError {
 }
 
 #[derive(Serialize)]
-struct ErrorResponse {
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ErrorResponse {
     error: String,
     status: u16,
 }
@@ -40,6 +44,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::FeatureDisabled(msg) => (StatusCode::FORBIDDEN, msg.clone()),
+            AppError::PayloadTooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
             AppError::Internal(e) => {
                 tracing::error!("Internal error: {e}");

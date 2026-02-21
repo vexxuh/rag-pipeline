@@ -18,10 +18,12 @@ use crate::state::AppState;
 // ── Conversations CRUD ──────────────────────────────────────
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateConversationRequest {
     pub title: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/conversations", tag = "Chat", security(("bearer_auth" = [])), request_body = CreateConversationRequest, responses((status = 200, body = Conversation))))]
 pub async fn create_conversation(
     State(state): State<AppState>,
     claims: Claims,
@@ -48,6 +50,7 @@ pub async fn create_conversation(
     Ok(Json(conv))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/conversations", tag = "Chat", security(("bearer_auth" = [])), responses((status = 200, body = Vec<Conversation>))))]
 pub async fn list_conversations(
     State(state): State<AppState>,
     claims: Claims,
@@ -57,12 +60,14 @@ pub async fn list_conversations(
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ConversationWithMessages {
     #[serde(flatten)]
     pub conversation: Conversation,
     pub messages: Vec<Message>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/conversations/{id}", tag = "Chat", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Conversation ID")), responses((status = 200, body = ConversationWithMessages))))]
 pub async fn get_conversation(
     State(state): State<AppState>,
     claims: Claims,
@@ -82,6 +87,7 @@ pub async fn get_conversation(
     }))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/conversations/{id}", tag = "Chat", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Conversation ID")), responses((status = 200))))]
 pub async fn delete_conversation(
     State(state): State<AppState>,
     claims: Claims,
@@ -106,10 +112,12 @@ pub async fn delete_conversation(
 // ── Send Message (with LLM + persistence) ───────────────────
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SendMessageRequest {
     pub message: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/conversations/{id}/messages", tag = "Chat", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Conversation ID")), request_body = SendMessageRequest, responses((status = 200, description = "SSE stream of assistant response"))))]
 pub async fn send_message(
     State(state): State<AppState>,
     claims: Claims,

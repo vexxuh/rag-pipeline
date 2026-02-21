@@ -3,6 +3,7 @@ use serde::Serialize;
 use crate::db::models::document::{Document, DocumentStatus};
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DocumentResponse {
     pub id: String,
     pub original_filename: String,

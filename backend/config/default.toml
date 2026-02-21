@@ -1,6 +1,7 @@
 [server]
 host = "0.0.0.0"
 port = 3000
+max_upload_size_mb = 50
 
 [auth]
 enabled = true
@@ -40,7 +41,7 @@ default_system_prompt = "You are a helpful assistant. Answer questions based on 
 
 [features]
 auth_enabled = true
-pdf_upload_enabled = true
+document_upload_enabled = true
 web_crawl_enabled = true
 admin_panel_enabled = true
 widget_enabled = true

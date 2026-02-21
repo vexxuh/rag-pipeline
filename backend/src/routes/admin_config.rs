@@ -9,6 +9,7 @@ use crate::errors::AppError;
 use crate::middleware::auth::{require_admin, Claims};
 use crate::state::AppState;
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/config/providers", tag = "Admin - Config", security(("bearer_auth" = [])), responses((status = 200, body = Vec<AdminProvider>))))]
 pub async fn list_providers(
     State(state): State<AppState>,
     claims: Claims,
@@ -19,10 +20,12 @@ pub async fn list_providers(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ToggleRequest {
     pub enabled: bool,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/admin/config/providers/{provider_id}/toggle", tag = "Admin - Config", security(("bearer_auth" = [])), params(("provider_id" = String, Path, description = "Provider ID")), request_body = ToggleRequest, responses((status = 200))))]
 pub async fn toggle_provider(
     State(state): State<AppState>,
     claims: Claims,
@@ -37,6 +40,7 @@ pub async fn toggle_provider(
     Ok(())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/config/providers/{provider_id}/models", tag = "Admin - Config", security(("bearer_auth" = [])), params(("provider_id" = String, Path, description = "Provider ID")), responses((status = 200, body = Vec<AdminModel>))))]
 pub async fn list_models(
     State(state): State<AppState>,
     claims: Claims,
@@ -47,6 +51,7 @@ pub async fn list_models(
     Ok(Json(models))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/admin/config/providers/{provider_id}/models", tag = "Admin - Config", security(("bearer_auth" = [])), params(("provider_id" = String, Path, description = "Provider ID")), request_body = AddModelRequest, responses((status = 200, body = AdminModel))))]
 pub async fn add_model(
     State(state): State<AppState>,
     claims: Claims,
@@ -71,6 +76,7 @@ pub async fn add_model(
     Ok(Json(model))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/admin/config/models/{model_id}", tag = "Admin - Config", security(("bearer_auth" = [])), params(("model_id" = String, Path, description = "Model ID")), responses((status = 200))))]
 pub async fn remove_model(
     State(state): State<AppState>,
     claims: Claims,
@@ -81,6 +87,7 @@ pub async fn remove_model(
     Ok(())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/admin/config/models/{model_id}/default", tag = "Admin - Config", security(("bearer_auth" = [])), params(("model_id" = String, Path, description = "Model ID")), responses((status = 200))))]
 pub async fn set_default_model(
     State(state): State<AppState>,
     claims: Claims,

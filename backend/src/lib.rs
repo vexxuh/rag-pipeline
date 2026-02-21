@@ -3,6 +3,8 @@ pub mod db;
 pub mod dto;
 pub mod errors;
 pub mod middleware;
+#[cfg(feature = "openapi")]
+pub mod openapi;
 pub mod routes;
 pub mod services;
 pub mod state;

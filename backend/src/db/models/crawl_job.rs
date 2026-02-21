@@ -4,6 +4,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CrawlJob {
     pub id: String,
     pub user_id: String,

@@ -14,8 +14,16 @@ use crate::services::storage::StorageService;
 use crate::services::vector::VectorService;
 use crate::state::AppState;
 
-const MAX_FILE_SIZE: usize = 50 * 1024 * 1024; // 50 MB
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/documents/limits", tag = "Documents", security(("bearer_auth" = [])), responses((status = 200, description = "Upload size limits", content_type = "application/json"))))]
+pub async fn upload_limits(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "max_upload_size_mb": state.config.server.max_upload_size_mb,
+    }))
+}
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/documents", tag = "Documents", security(("bearer_auth" = [])), request_body(content_type = "multipart/form-data", description = "File upload"), responses((status = 200, body = DocumentResponse), (status = 413, description = "File too large"))))]
 pub async fn upload(
     State(state): State<AppState>,
     claims: Claims,
@@ -23,9 +31,28 @@ pub async fn upload(
 ) -> Result<Json<DocumentResponse>, AppError> {
     require_maintainer(&claims)?;
 
-    if !state.config.features.pdf_upload_enabled {
-        return Err(AppError::FeatureDisabled("PDF upload".to_string()));
+    if !state.config.features.document_upload_enabled {
+        return Err(AppError::FeatureDisabled("Document upload".to_string()));
     }
+
+    // Require an embedding API key before accepting the upload
+    let embedding_provider = state.config.llm.default_provider.clone();
+    let api_key = state
+        .settings_repo
+        .get_api_key(&claims.sub, &embedding_provider)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    if api_key.is_empty() {
+        return Err(AppError::Validation(format!(
+            "No API key configured for embedding provider '{}'. Add one in Settings before uploading.",
+            embedding_provider
+        )));
+    }
+
+    let max_file_size = state.config.server.max_upload_size_mb * 1024 * 1024;
 
     let field = multipart
         .next_field()
@@ -35,18 +62,18 @@ pub async fn upload(
 
     let original_filename = field
         .file_name()
-        .unwrap_or("unnamed.pdf")
+        .unwrap_or("unnamed.txt")
         .to_string();
 
     let content_type = field
         .content_type()
-        .unwrap_or("application/pdf")
+        .unwrap_or("application/octet-stream")
         .to_string();
 
-    if content_type != "application/pdf" {
-        return Err(AppError::Validation(
-            "Only PDF files are supported".to_string(),
-        ));
+    if !crate::services::text_extract::is_supported(&content_type, &original_filename) {
+        return Err(AppError::Validation(format!(
+            "Unsupported file type. Supported: PDF, DOCX, XLSX, XML, CSV, TXT, MD"
+        )));
     }
 
     let data = field
@@ -54,11 +81,10 @@ pub async fn upload(
         .await
         .map_err(|e| AppError::Validation(format!("Failed to read file: {e}")))?;
 
-    if data.len() > MAX_FILE_SIZE {
-        return Err(AppError::Validation(format!(
-            "File too large. Maximum size is {} MB",
-            MAX_FILE_SIZE / 1024 / 1024
-        )));
+    if data.len() > max_file_size {
+        return Err(AppError::PayloadTooLarge(
+            state.config.server.max_upload_size_mb,
+        ));
     }
 
     let size_bytes = data.len() as i64;
@@ -100,22 +126,17 @@ pub async fn upload(
     let storage_clone = state.storage.clone();
     let vector_service = state.vector_service.clone();
     let chunk_repo = state.chunk_repo.clone();
-    let embedding_provider = state.config.llm.default_provider.clone();
     let embedding_model = state.config.llm.default_embedding_model.clone();
-    // Try to get the user's API key for embeddings
-    let api_key = state
-        .settings_repo
-        .get_api_key(&claims.sub, &embedding_provider)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let file_content_type = content_type.clone();
+    let file_name = original_filename.clone();
 
     tokio::spawn(async move {
         match process_document(
             &storage_clone,
             &key,
             &doc_id,
+            &file_content_type,
+            &file_name,
             &vector_service,
             &chunk_repo,
             &embedding_provider,
@@ -161,6 +182,7 @@ pub async fn upload(
     Ok(Json(updated_doc.into()))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/documents", tag = "Documents", security(("bearer_auth" = [])), responses((status = 200, body = Vec<DocumentResponse>))))]
 pub async fn list(
     State(state): State<AppState>,
     claims: Claims,
@@ -170,6 +192,7 @@ pub async fn list(
     Ok(Json(docs.into_iter().map(|d| d.into()).collect()))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/documents/{id}", tag = "Documents", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Document ID")), responses((status = 200, body = DocumentResponse))))]
 pub async fn get_document(
     State(state): State<AppState>,
     claims: Claims,
@@ -189,6 +212,7 @@ pub async fn get_document(
     Ok(Json(doc.into()))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/documents/{id}", tag = "Documents", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Document ID")), responses((status = 200))))]
 pub async fn delete_document(
     State(state): State<AppState>,
     claims: Claims,
@@ -238,20 +262,15 @@ pub async fn delete_document(
 }
 
 /// Rescan all documents: re-extract, re-chunk, and re-embed into the vector database.
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/documents/rescan", tag = "Documents", security(("bearer_auth" = [])), responses((status = 200, description = "Rescan started"))))]
 pub async fn rescan(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&claims)?;
 
-    let docs = state.document_repo.find_all_ready().await?;
-    let total = docs.len();
-
-    let vector_service = state.vector_service.clone();
-    let chunk_repo = state.chunk_repo.clone();
-    let storage = state.storage.clone();
+    // Require an embedding API key before rescanning
     let embedding_provider = state.config.llm.default_provider.clone();
-    let embedding_model = state.config.llm.default_embedding_model.clone();
     let api_key = state
         .settings_repo
         .get_api_key(&claims.sub, &embedding_provider)
@@ -259,6 +278,21 @@ pub async fn rescan(
         .ok()
         .flatten()
         .unwrap_or_default();
+
+    if api_key.is_empty() {
+        return Err(AppError::Validation(format!(
+            "No API key configured for embedding provider '{}'. Add one in Settings before rescanning.",
+            embedding_provider
+        )));
+    }
+
+    let docs = state.document_repo.find_all_ready().await?;
+    let total = docs.len();
+
+    let vector_service = state.vector_service.clone();
+    let chunk_repo = state.chunk_repo.clone();
+    let storage = state.storage.clone();
+    let embedding_model = state.config.llm.default_embedding_model.clone();
 
     tokio::spawn(async move {
         tracing::info!("Starting rescan of {total} documents");
@@ -275,6 +309,8 @@ pub async fn rescan(
                 &storage,
                 &doc.minio_key,
                 &doc.id,
+                &doc.content_type,
+                &doc.original_filename,
                 &vector_service,
                 &chunk_repo,
                 &embedding_provider,
@@ -311,6 +347,8 @@ async fn process_document(
     storage: &StorageService,
     minio_key: &str,
     doc_id: &str,
+    content_type: &str,
+    filename: &str,
     vector_service: &Arc<VectorService>,
     chunk_repo: &DocumentChunkRepository,
     embedding_provider: &str,
@@ -318,13 +356,13 @@ async fn process_document(
     api_key: &str,
 ) -> anyhow::Result<()> {
     // Download from MinIO
-    let pdf_bytes = storage.download(minio_key).await?;
+    let file_bytes = storage.download(minio_key).await?;
 
-    // Extract text
-    let text = crate::services::pdf::extract_text(&pdf_bytes)?;
+    // Extract text based on file type
+    let text = crate::services::text_extract::extract_text(&file_bytes, content_type, filename)?;
 
     // Chunk text for embedding
-    let chunks = crate::services::pdf::chunk_text(&text, 200, 30);
+    let chunks = crate::services::text_extract::chunk_text(&text, 200, 30);
 
     if chunks.is_empty() {
         tracing::info!("Document {doc_id}: no text chunks to embed");
@@ -333,8 +371,7 @@ async fn process_document(
 
     // Generate embeddings
     if api_key.is_empty() {
-        tracing::warn!("Document {doc_id}: no API key for embedding provider '{embedding_provider}', skipping embedding");
-        return Ok(());
+        anyhow::bail!("No API key configured for embedding provider '{embedding_provider}'");
     }
 
     let embeddings_client =

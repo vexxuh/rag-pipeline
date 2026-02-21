@@ -4,6 +4,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Conversation {
     pub id: String,
     pub user_id: String,
@@ -15,6 +16,7 @@ pub struct Conversation {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ConversationWithUser {
     pub id: String,
     pub user_id: String,
@@ -29,6 +31,7 @@ pub struct ConversationWithUser {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Message {
     pub id: String,
     pub conversation_id: String,

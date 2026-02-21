@@ -10,6 +10,7 @@ use crate::middleware::auth::{require_admin, Claims};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams))]
 pub struct LogsQuery {
     pub user_id: Option<String>,
     pub page: Option<i64>,
@@ -17,6 +18,7 @@ pub struct LogsQuery {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct LogsResponse {
     pub conversations: Vec<ConversationWithUser>,
     pub total: i64,
@@ -24,6 +26,7 @@ pub struct LogsResponse {
     pub per_page: i64,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/logs", tag = "Admin - Logs", security(("bearer_auth" = [])), params(LogsQuery), responses((status = 200, body = LogsResponse))))]
 pub async fn list_conversation_logs(
     State(state): State<AppState>,
     claims: Claims,
@@ -54,6 +57,7 @@ pub async fn list_conversation_logs(
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct LogDetailResponse {
     pub id: String,
     pub user_id: String,
@@ -63,6 +67,7 @@ pub struct LogDetailResponse {
     pub messages: Vec<Message>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/logs/{id}", tag = "Admin - Logs", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Conversation ID")), responses((status = 200, body = LogDetailResponse))))]
 pub async fn get_conversation_log(
     State(state): State<AppState>,
     claims: Claims,

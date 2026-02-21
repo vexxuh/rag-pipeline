@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct EmbedKey {
     pub id: String,
     pub name: String,
@@ -27,6 +28,7 @@ pub struct EmbedKey {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateEmbedKeyRequest {
     pub name: Option<String>,
     pub allowed_domains: Option<Vec<String>>,

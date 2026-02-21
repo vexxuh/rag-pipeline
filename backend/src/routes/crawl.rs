@@ -14,11 +14,13 @@ use crate::services::vector::VectorService;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct StartCrawlRequest {
     pub url: String,
     pub crawl_type: String, // "sitemap" or "full"
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/crawl", tag = "Crawl", security(("bearer_auth" = [])), request_body = StartCrawlRequest, responses((status = 200, body = CrawlJob))))]
 pub async fn start_crawl(
     State(state): State<AppState>,
     claims: Claims,
@@ -44,6 +46,23 @@ pub async fn start_crawl(
     url::Url::parse(&payload.url)
         .map_err(|_| AppError::Validation("Invalid URL".to_string()))?;
 
+    // Require an embedding API key before starting the crawl
+    let embedding_provider = state.config.llm.default_provider.clone();
+    let api_key = state
+        .settings_repo
+        .get_api_key(&claims.sub, &embedding_provider)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    if api_key.is_empty() {
+        return Err(AppError::Validation(format!(
+            "No API key configured for embedding provider '{}'. Add one in Settings before crawling.",
+            embedding_provider
+        )));
+    }
+
     let job = state
         .crawl_repo
         .create(&claims.sub, &payload.url, &payload.crawl_type)
@@ -68,15 +87,7 @@ pub async fn start_crawl(
     let crawl_repo = state.crawl_repo.clone();
     let vector_service = state.vector_service.clone();
     let chunk_repo = state.chunk_repo.clone();
-    let embedding_provider = state.config.llm.default_provider.clone();
     let embedding_model = state.config.llm.default_embedding_model.clone();
-    let api_key = state
-        .settings_repo
-        .get_api_key(&claims.sub, &embedding_provider)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
 
     tokio::spawn(async move {
         // Update to running
@@ -135,6 +146,7 @@ pub async fn start_crawl(
     Ok(Json(job))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/crawl/{id}", tag = "Crawl", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Crawl job ID")), responses((status = 200, body = CrawlJob))))]
 pub async fn get_crawl_job(
     State(state): State<AppState>,
     claims: Claims,
@@ -154,6 +166,7 @@ pub async fn get_crawl_job(
     Ok(Json(job))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/crawl", tag = "Crawl", security(("bearer_auth" = [])), responses((status = 200, body = Vec<CrawlJob>))))]
 pub async fn list_crawl_jobs(
     State(state): State<AppState>,
     claims: Claims,
@@ -190,9 +203,13 @@ async fn run_crawl(
     let successful_pages: Vec<_> = pages.into_iter().filter_map(|r| r.ok()).collect();
     let processed = successful_pages.len() as i64;
 
-    // Embed page content if we have an API key
-    if !api_key.is_empty() && !successful_pages.is_empty() {
-        if let Err(e) = embed_crawled_pages(
+    // Embed page content
+    if api_key.is_empty() {
+        anyhow::bail!("No API key configured for embedding provider '{embedding_provider}'");
+    }
+
+    if !successful_pages.is_empty() {
+        embed_crawled_pages(
             &successful_pages,
             job_id,
             vector_service,
@@ -201,14 +218,7 @@ async fn run_crawl(
             embedding_model,
             api_key,
         )
-        .await
-        {
-            tracing::error!("Failed to embed crawled pages for job {job_id}: {e:#}");
-        }
-    } else if api_key.is_empty() {
-        tracing::warn!(
-            "Crawl job {job_id}: no API key for embedding provider '{embedding_provider}', skipping embedding"
-        );
+        .await?;
     }
 
     crawl_repo
@@ -238,7 +248,7 @@ async fn embed_crawled_pages(
     let mut chunk_metadata: Vec<(usize, i32)> = Vec::new(); // (page_index, chunk_index)
 
     for (page_idx, page) in pages.iter().enumerate() {
-        let chunks = crate::services::pdf::chunk_text(&page.content, 200, 30);
+        let chunks = crate::services::text_extract::chunk_text(&page.content, 200, 30);
         for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
             all_chunks.push(chunk);
             chunk_metadata.push((page_idx, chunk_idx as i32));

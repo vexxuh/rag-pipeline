@@ -4,6 +4,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApiKeyEntry {
     pub id: String,
     pub provider: String,
@@ -11,6 +12,7 @@ pub struct ApiKeyEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct LlmPreferences {
     pub preferred_provider: String,
     pub preferred_model: String,

@@ -2,7 +2,7 @@
 
 .PHONY: help docker docker-no-frontend docker-no-backend dev dev-backend dev-frontend \
         infra infra-down build build-backend build-frontend test test-backend test-frontend \
-        check lint clean nuke logs
+        check lint clean nuke logs docs
 
 # ── Help ────────────────────────────────────────────────────────
 help: ## Show this help message
@@ -34,6 +34,9 @@ help: ## Show this help message
 	@echo "    make test-frontend       Run frontend tests only"
 	@echo "    make check               Quick compile check (backend)"
 	@echo "    make lint                Run clippy lints (backend)"
+	@echo ""
+	@printf "  \033[1mDocs\033[0m\n"
+	@echo "    make docs                Run backend with ReDoc API docs at localhost:3000/api/docs"
 	@echo ""
 	@printf "  \033[1mUtility\033[0m\n"
 	@echo "    make logs                Tail logs from all Docker containers"
@@ -112,6 +115,14 @@ logs: ## Tail logs from all Docker containers
 clean: ## Remove all build artifacts
 	cd backend && cargo clean
 	rm -rf frontend/node_modules frontend/.svelte-kit frontend/build
+
+docs: infra ## Run backend with OpenAPI docs (ReDoc at http://localhost:3000/api/docs)
+	@echo ""
+	@echo "  Starting backend with OpenAPI docs..."
+	@echo "  ReDoc:    http://localhost:3000/api/docs"
+	@echo "  OpenAPI:  http://localhost:3000/api/openapi.json"
+	@echo ""
+	cd backend && cargo run --features openapi
 
 nuke: ## Stop and remove ALL Docker resources (containers, volumes, images)
 	@echo "  Stopping all containers..."

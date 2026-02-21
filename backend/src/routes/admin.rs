@@ -10,6 +10,7 @@ use crate::middleware::auth::{require_admin, Claims};
 use crate::services::audit;
 use crate::state::AppState;
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/users", tag = "Admin - Users", security(("bearer_auth" = [])), responses((status = 200, body = Vec<UserResponse>))))]
 pub async fn list_users(
     State(state): State<AppState>,
     claims: Claims,
@@ -21,6 +22,7 @@ pub async fn list_users(
     Ok(Json(responses))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(put, path = "/api/admin/users/{user_id}/role", tag = "Admin - Users", security(("bearer_auth" = [])), params(("user_id" = String, Path, description = "User ID")), request_body = UpdateRoleRequest, responses((status = 200, body = UserResponse))))]
 pub async fn update_user_role(
     State(state): State<AppState>,
     claims: Claims,
@@ -57,6 +59,7 @@ pub async fn update_user_role(
     Ok(Json(user.into()))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/admin/users/{user_id}", tag = "Admin - Users", security(("bearer_auth" = [])), params(("user_id" = String, Path, description = "User ID")), responses((status = 200))))]
 pub async fn delete_user(
     State(state): State<AppState>,
     claims: Claims,
@@ -92,6 +95,7 @@ pub async fn delete_user(
     Ok(())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/admin/invites", tag = "Admin - Users", security(("bearer_auth" = [])), request_body = InviteRequest, responses((status = 200, body = InviteResponse))))]
 pub async fn invite_user(
     State(state): State<AppState>,
     claims: Claims,
@@ -140,6 +144,7 @@ pub async fn invite_user(
     Ok(Json(invite_to_response(invite, frontend_url)))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/admin/invites", tag = "Admin - Users", security(("bearer_auth" = [])), responses((status = 200, body = Vec<InviteResponse>))))]
 pub async fn list_invites(
     State(state): State<AppState>,
     claims: Claims,

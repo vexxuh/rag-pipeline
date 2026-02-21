@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::services::llm_provider;
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminProvider {
     pub id: String,
     pub provider_id: String,
@@ -17,6 +18,7 @@ pub struct AdminProvider {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminModel {
     pub id: String,
     pub provider_id: String,
@@ -28,6 +30,7 @@ pub struct AdminModel {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AddModelRequest {
     pub model_id: String,
     pub display_name: String,

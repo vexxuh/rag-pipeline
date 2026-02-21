@@ -7,6 +7,7 @@ use crate::middleware::auth::{extract_ip, Claims};
 use crate::services::{audit, auth_service};
 use crate::state::AppState;
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/auth/login", tag = "Auth", request_body = LoginRequest, responses((status = 200, body = AuthResponse), (status = 400, description = "Invalid credentials"))))]
 pub async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -53,6 +54,7 @@ pub async fn login(
     }))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(post, path = "/api/auth/setup", tag = "Auth", request_body = SetupRequest, responses((status = 200, body = AuthResponse), (status = 400, description = "Validation error"))))]
 pub async fn setup(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -127,6 +129,7 @@ pub async fn setup(
     }))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/auth/me", tag = "Auth", security(("bearer_auth" = [])), responses((status = 200, body = UserResponse))))]
 pub async fn me(
     State(state): State<AppState>,
     claims: Claims,

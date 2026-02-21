@@ -19,6 +19,7 @@ pub struct AppConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub max_upload_size_mb: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,7 +73,7 @@ pub struct LlmConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct FeatureFlags {
     pub auth_enabled: bool,
-    pub pdf_upload_enabled: bool,
+    pub document_upload_enabled: bool,
     pub web_crawl_enabled: bool,
     pub admin_panel_enabled: bool,
     pub widget_enabled: bool,
@@ -118,7 +119,7 @@ mod tests {
         let config = config.unwrap();
         assert_eq!(config.server.port, 3000);
         assert!(config.features.auth_enabled);
-        assert!(config.features.pdf_upload_enabled);
+        assert!(config.features.document_upload_enabled);
     }
 
     #[test]
