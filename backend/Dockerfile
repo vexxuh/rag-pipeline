@@ -25,6 +25,7 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/rag-backend /app/rag-backend
 COPY --from=builder /app/config /app/config
+COPY static /app/static
 
 RUN mkdir -p /app/data
 
