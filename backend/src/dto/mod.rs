@@ -1,1 +1,2 @@
-// DTOs will be added in subsequent phases
+pub mod auth;
+pub mod document;

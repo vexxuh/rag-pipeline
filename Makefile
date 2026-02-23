@@ -2,7 +2,7 @@
 
 .PHONY: help docker docker-no-frontend docker-no-backend dev dev-backend dev-frontend \
         infra infra-down build build-backend build-frontend test test-backend test-frontend \
-        check lint clean logs
+        check lint clean nuke logs docs
 
 # ── Help ────────────────────────────────────────────────────────
 help: ## Show this help message
@@ -20,7 +20,7 @@ help: ## Show this help message
 	@echo "    make dev                 Start infra in Docker, then run backend + frontend locally"
 	@echo "    make dev-backend         Run only the backend locally (assumes infra is up)"
 	@echo "    make dev-frontend        Run only the frontend locally"
-	@echo "    make infra               Start infrastructure only (MinIO + Qdrant) in Docker"
+	@echo "    make infra               Start infrastructure (Postgres + MinIO + Qdrant) in Docker"
 	@echo "    make infra-down          Stop infrastructure containers"
 	@echo ""
 	@printf "  \033[1mBuild\033[0m\n"
@@ -35,9 +35,13 @@ help: ## Show this help message
 	@echo "    make check               Quick compile check (backend)"
 	@echo "    make lint                Run clippy lints (backend)"
 	@echo ""
+	@printf "  \033[1mDocs\033[0m\n"
+	@echo "    make docs                Run backend with ReDoc API docs at localhost:3000/api/docs"
+	@echo ""
 	@printf "  \033[1mUtility\033[0m\n"
 	@echo "    make logs                Tail logs from all Docker containers"
 	@echo "    make clean               Remove all build artifacts"
+	@echo "    make nuke                Stop and remove ALL Docker resources (containers, volumes, images)"
 	@echo ""
 
 # ── Docker (fully containerized) ───────────────────────────────
@@ -57,10 +61,11 @@ docker-down: ## Stop and remove all Docker containers
 dev: infra ## Start infra in Docker, run backend + frontend locally
 	@echo ""
 	@echo "  Infrastructure is running. Starting applications..."
-	@echo "  Backend:  http://localhost:3000"
-	@echo "  Frontend: http://localhost:5173"
-	@echo "  MinIO:    http://localhost:9001"
-	@echo "  Qdrant:   http://localhost:6333/dashboard"
+	@echo "  Backend:   http://localhost:3000"
+	@echo "  Frontend:  http://localhost:5173"
+	@echo "  Postgres:  localhost:5432"
+	@echo "  MinIO:     http://localhost:9001"
+	@echo "  Qdrant:    http://localhost:6333/dashboard"
 	@echo ""
 	@trap 'kill 0' EXIT; \
 	(cd backend && cargo run) & \
@@ -73,8 +78,8 @@ dev-backend: ## Run backend locally (assumes infra is already up)
 dev-frontend: ## Run frontend locally
 	cd frontend && npm run dev -- --port 5173
 
-infra: ## Start only infrastructure (MinIO + Qdrant) in Docker
-	docker compose up -d qdrant minio minio-init
+infra: ## Start only infrastructure (Postgres + MinIO + Qdrant) in Docker
+	docker compose up -d postgres qdrant minio minio-init
 
 infra-down: ## Stop infrastructure containers
 	docker compose down
@@ -110,3 +115,18 @@ logs: ## Tail logs from all Docker containers
 clean: ## Remove all build artifacts
 	cd backend && cargo clean
 	rm -rf frontend/node_modules frontend/.svelte-kit frontend/build
+
+docs: infra ## Run backend with OpenAPI docs (ReDoc at http://localhost:3000/api/docs)
+	@echo ""
+	@echo "  Starting backend with OpenAPI docs..."
+	@echo "  ReDoc:    http://localhost:3000/api/docs"
+	@echo "  OpenAPI:  http://localhost:3000/api/openapi.json"
+	@echo ""
+	cd backend && cargo run --features openapi
+
+nuke: ## Stop and remove ALL Docker resources (containers, volumes, images)
+	@echo "  Stopping all containers..."
+	docker compose --profile app --profile backend --profile frontend down --volumes --remove-orphans
+	@echo "  Removing project images..."
+	@docker images --filter "reference=rag-pipeline*" -q | xargs -r docker rmi -f 2>/dev/null || true
+	@echo "  Done. All Docker resources for this project have been removed."

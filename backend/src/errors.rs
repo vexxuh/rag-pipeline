@@ -19,15 +19,19 @@ pub enum AppError {
     #[error("Feature disabled: {0}")]
     FeatureDisabled(String),
 
-    #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    #[error("File too large. Maximum upload size is {0} MB")]
+    PayloadTooLarge(usize),
+
+    #[error("Rate limit exceeded")]
+    RateLimited,
 
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
 
 #[derive(Serialize)]
-struct ErrorResponse {
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ErrorResponse {
     error: String,
     status: u16,
 }
@@ -40,13 +44,8 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::FeatureDisabled(msg) => (StatusCode::FORBIDDEN, msg.clone()),
-            AppError::Database(e) => {
-                tracing::error!("Database error: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
-                )
-            }
+            AppError::PayloadTooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
+            AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
             AppError::Internal(e) => {
                 tracing::error!("Internal error: {e}");
                 (

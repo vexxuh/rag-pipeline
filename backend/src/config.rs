@@ -5,18 +5,21 @@ use serde::Deserialize;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
+    pub resend: ResendConfig,
     pub database: DatabaseConfig,
     pub minio: MinioConfig,
     pub qdrant: QdrantConfig,
     pub llm: LlmConfig,
     pub features: FeatureFlags,
     pub crawler: CrawlerConfig,
+    pub widget: WidgetConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub max_upload_size_mb: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -24,11 +27,21 @@ pub struct AuthConfig {
     pub enabled: bool,
     pub jwt_secret: String,
     pub jwt_expiry_hours: i64,
+    pub admin_email: String,
+    pub admin_password: String,
+    pub admin_username: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ResendConfig {
+    pub api_key: String,
+    pub from_email: String,
+    pub frontend_url: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    pub path: String,
+    pub url: String,
     pub max_connections: u32,
 }
 
@@ -54,14 +67,16 @@ pub struct LlmConfig {
     pub default_provider: String,
     pub default_model: String,
     pub default_embedding_model: String,
+    pub default_system_prompt: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FeatureFlags {
     pub auth_enabled: bool,
-    pub pdf_upload_enabled: bool,
+    pub document_upload_enabled: bool,
     pub web_crawl_enabled: bool,
     pub admin_panel_enabled: bool,
+    pub widget_enabled: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -70,6 +85,12 @@ pub struct CrawlerConfig {
     pub max_depth: usize,
     pub request_timeout_secs: u64,
     pub user_agent: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WidgetConfig {
+    pub enabled: bool,
+    pub default_rate_limit: i32,
 }
 
 impl AppConfig {
@@ -89,26 +110,35 @@ impl AppConfig {
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+
+    // Env-var tests mutate shared process state, so they must run sequentially.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn test_default_config_loads() {
-        std::env::set_var("RUN_ENV", "development");
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("APP__SERVER__PORT") };
+        unsafe { std::env::set_var("RUN_ENV", "development") };
+
         let config = AppConfig::load();
         assert!(config.is_ok(), "Default config should load: {config:?}");
 
         let config = config.unwrap();
         assert_eq!(config.server.port, 3000);
         assert!(config.features.auth_enabled);
-        assert!(config.features.pdf_upload_enabled);
+        assert!(config.features.document_upload_enabled);
     }
 
     #[test]
     fn test_env_override() {
-        std::env::set_var("APP__SERVER__PORT", "8080");
-        std::env::set_var("RUN_ENV", "development");
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("APP__SERVER__PORT", "8080") };
+        unsafe { std::env::set_var("RUN_ENV", "development") };
 
         let config = AppConfig::load().unwrap();
         assert_eq!(config.server.port, 8080);
 
-        std::env::remove_var("APP__SERVER__PORT");
+        unsafe { std::env::remove_var("APP__SERVER__PORT") };
     }
 }

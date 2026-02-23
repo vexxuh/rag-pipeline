@@ -1,1 +1,12 @@
+pub mod admin;
+pub mod admin_audit;
+pub mod admin_config;
+pub mod admin_embed;
+pub mod admin_logs;
+pub mod auth;
+pub mod chat;
+pub mod crawl;
+pub mod documents;
 pub mod health;
+pub mod settings;
+pub mod widget;

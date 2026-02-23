@@ -35,6 +35,17 @@ services:
       exit 0;
       "
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag
+
   # ── Application (profile-gated) ──────────────────────────────
   backend:
     build:
@@ -46,17 +57,24 @@ services:
     depends_on:
       - qdrant
       - minio
+      - postgres
     environment:
       RUN_ENV: production
       APP__SERVER__HOST: "0.0.0.0"
       APP__SERVER__PORT: "3000"
-      APP__DATABASE__PATH: "/app/data/rag.db"
+      APP__DATABASE__URL: "postgres://rag:rag@postgres:5432/rag"
       APP__MINIO__ENDPOINT: "http://minio:9000"
       APP__MINIO__ACCESS_KEY: "minioadmin"
       APP__MINIO__SECRET_KEY: "minioadmin"
       APP__MINIO__BUCKET_NAME: "rag-documents"
       APP__QDRANT__URL: "http://qdrant:6333"
       APP__AUTH__JWT_SECRET: "dev-secret-change-me-in-production-min-32-chars"
+      APP__AUTH__ADMIN_EMAIL: "admin@example.com"
+      APP__AUTH__ADMIN_PASSWORD: "changeme123!"
+      APP__AUTH__ADMIN_USERNAME: "admin"
+      APP__RESEND__API_KEY: "${RESEND_API_KEY:-}"
+      APP__RESEND__FROM_EMAIL: "${RESEND_FROM_EMAIL:-noreply@yourdomain.com}"
+      APP__RESEND__FRONTEND_URL: "http://localhost:5173"
     volumes:
       - backend_data:/app/data
 
@@ -78,4 +96,5 @@ services:
 volumes:
   qdrant_data:
   minio_data:
+  postgres_data:
   backend_data:
