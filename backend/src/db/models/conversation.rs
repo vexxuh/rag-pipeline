@@ -32,6 +32,19 @@ pub struct ConversationWithUser {
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WidgetConversationLog {
+    pub id: String,
+    pub embed_key_id: String,
+    pub embed_key_name: String,
+    pub session_id: String,
+    pub title: String,
+    pub message_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Message {
     pub id: String,
     pub conversation_id: String,
@@ -250,7 +263,7 @@ impl ConversationRepository {
                             to_char(c.deleted_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS deleted_at
                      FROM conversations c
                      JOIN users u ON c.user_id = u.id
-                     WHERE c.user_id = $1
+                     WHERE c.user_id = $1 AND (c.source IS NULL OR c.source != 'widget')
                      ORDER BY c.updated_at DESC
                      LIMIT $2 OFFSET $3";
         } else {
@@ -262,6 +275,7 @@ impl ConversationRepository {
                             to_char(c.deleted_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS deleted_at
                      FROM conversations c
                      JOIN users u ON c.user_id = u.id
+                     WHERE (c.source IS NULL OR c.source != 'widget')
                      ORDER BY c.updated_at DESC
                      LIMIT $1 OFFSET $2";
         }
@@ -303,17 +317,114 @@ impl ConversationRepository {
     pub async fn count_all(&self, user_id_filter: Option<&str>) -> Result<i64> {
         let count = if let Some(uid) = user_id_filter {
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM conversations WHERE user_id = $1",
+                "SELECT COUNT(*) FROM conversations WHERE user_id = $1 AND (source IS NULL OR source != 'widget')",
             )
             .bind(uid)
             .fetch_one(&self.pool)
             .await
         } else {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversations")
-                .fetch_one(&self.pool)
-                .await
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM conversations WHERE (source IS NULL OR source != 'widget')",
+            )
+            .fetch_one(&self.pool)
+            .await
         }
         .context("Failed to count conversations")?;
+
+        Ok(count)
+    }
+
+    // ── Widget log queries (admin) ───────────────────────────
+
+    pub async fn list_widget_conversations(
+        &self,
+        embed_key_id_filter: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<WidgetConversationLog>> {
+        let (query, bind_ek_id);
+        if let Some(ek_id) = embed_key_id_filter {
+            bind_ek_id = Some(ek_id.to_string());
+            query = "SELECT c.id, c.embed_key_id,
+                            COALESCE(ek.name, 'Unknown') AS embed_key_name,
+                            COALESCE(c.session_id, '') AS session_id,
+                            c.title,
+                            (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+                            to_char(c.created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,
+                            to_char(c.updated_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at
+                     FROM conversations c
+                     LEFT JOIN embed_keys ek ON c.embed_key_id = ek.id
+                     WHERE c.source = 'widget' AND c.embed_key_id = $1
+                     ORDER BY c.updated_at DESC
+                     LIMIT $2 OFFSET $3";
+        } else {
+            bind_ek_id = None;
+            query = "SELECT c.id, c.embed_key_id,
+                            COALESCE(ek.name, 'Unknown') AS embed_key_name,
+                            COALESCE(c.session_id, '') AS session_id,
+                            c.title,
+                            (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+                            to_char(c.created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,
+                            to_char(c.updated_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at
+                     FROM conversations c
+                     LEFT JOIN embed_keys ek ON c.embed_key_id = ek.id
+                     WHERE c.source = 'widget'
+                     ORDER BY c.updated_at DESC
+                     LIMIT $1 OFFSET $2";
+        }
+
+        let rows = if let Some(ref ek_id) = bind_ek_id {
+            sqlx::query(query)
+                .bind(ek_id)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query(query)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&self.pool)
+                .await
+        }
+        .context("Failed to list widget conversations")?;
+
+        let conversations = rows
+            .iter()
+            .map(|row| WidgetConversationLog {
+                id: row.get("id"),
+                embed_key_id: row.get::<Option<String>, _>("embed_key_id").unwrap_or_default(),
+                embed_key_name: row.get("embed_key_name"),
+                session_id: row.get("session_id"),
+                title: row.get("title"),
+                message_count: row.get("message_count"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect();
+
+        Ok(conversations)
+    }
+
+    pub async fn count_widget_conversations(
+        &self,
+        embed_key_id_filter: Option<&str>,
+    ) -> Result<i64> {
+        let count = if let Some(ek_id) = embed_key_id_filter {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM conversations WHERE source = 'widget' AND embed_key_id = $1",
+            )
+            .bind(ek_id)
+            .fetch_one(&self.pool)
+            .await
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM conversations WHERE source = 'widget'",
+            )
+            .fetch_one(&self.pool)
+            .await
+        }
+        .context("Failed to count widget conversations")?;
 
         Ok(count)
     }

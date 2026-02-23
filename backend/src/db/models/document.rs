@@ -138,6 +138,16 @@ impl DocumentRepository {
         rows.iter().map(|r| Self::map_row(r)).collect()
     }
 
+    pub async fn update_minio_key(&self, id: &str, minio_key: &str) -> Result<()> {
+        sqlx::query("UPDATE documents SET minio_key = $1 WHERE id = $2")
+            .bind(minio_key)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update document minio_key")?;
+        Ok(())
+    }
+
     pub async fn update_status(
         &self,
         id: &str,

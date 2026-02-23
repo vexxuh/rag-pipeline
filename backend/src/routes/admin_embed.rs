@@ -33,6 +33,8 @@ pub struct CreateEmbedKeyRequest {
     pub model: String,
     #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
+    pub custom_css: String,
 }
 
 fn default_widget_title() -> String {
@@ -102,6 +104,7 @@ pub async fn create_key(
             &payload.provider,
             &payload.model,
             &payload.api_key,
+            &payload.custom_css,
         )
         .await?;
 

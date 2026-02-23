@@ -17,6 +17,7 @@ pub async fn run_all(pool: &PgPool) -> Result<()> {
     create_embed_keys_table(pool).await?;
     create_widget_sessions_table(pool).await?;
     add_widget_columns_to_conversations(pool).await?;
+    add_custom_css_to_embed_keys(pool).await?;
     tracing::info!("Database migrations completed");
     Ok(())
 }
@@ -438,6 +439,17 @@ async fn add_widget_columns_to_conversations(pool: &PgPool) -> Result<()> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id) WHERE session_id IS NOT NULL")
         .execute(pool)
         .await?;
+
+    Ok(())
+}
+
+async fn add_custom_css_to_embed_keys(pool: &PgPool) -> Result<()> {
+    sqlx::query(
+        "ALTER TABLE embed_keys ADD COLUMN IF NOT EXISTS custom_css TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(pool)
+    .await
+    .context("Failed to add custom_css to embed_keys")?;
 
     Ok(())
 }

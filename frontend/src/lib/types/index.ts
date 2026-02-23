@@ -120,6 +120,24 @@ export interface LogsResponse {
   per_page: number;
 }
 
+export interface WidgetConversationLog {
+  id: string;
+  embed_key_id: string;
+  embed_key_name: string;
+  session_id: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WidgetLogsResponse {
+  conversations: WidgetConversationLog[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
 export interface LogDetail {
   id: string;
   user_id: string;
@@ -141,6 +159,7 @@ export interface EmbedKey {
   greeting_message: string;
   provider: string;
   model: string;
+  custom_css: string;
   is_active: boolean;
   total_conversations: number;
   total_messages: number;
@@ -151,4 +170,23 @@ export interface EmbedKey {
 export interface CreateEmbedKeyResponse {
   embed_key: EmbedKey;
   raw_key: string;
+}
+
+export interface AuditLog {
+  id: string;
+  user_id: string | null;
+  event_type: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  description: string;
+  ip_address: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AuditLogsResponse {
+  logs: AuditLog[];
+  total: number;
+  page: number;
+  per_page: number;
 }

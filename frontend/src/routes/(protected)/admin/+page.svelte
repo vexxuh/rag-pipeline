@@ -14,7 +14,11 @@
 		AdminProvider,
 		AdminModel,
 		EmbedKey,
-		CreateEmbedKeyResponse
+		CreateEmbedKeyResponse,
+		AuditLog,
+		AuditLogsResponse,
+		WidgetConversationLog,
+		WidgetLogsResponse
 	} from '$types/index';
 
 	type Role = 'admin' | 'maintainer' | 'user';
@@ -44,6 +48,8 @@
 	let copiedId = $state('');
 
 	// Logs state
+	type LogsSubTab = 'conversations' | 'activity' | 'widget';
+	let logsSubTab: LogsSubTab = $state('conversations');
 	let logs: ConversationLog[] = $state([]);
 	let logsTotal = $state(0);
 	let logsPage = $state(1);
@@ -51,6 +57,23 @@
 	let logsUserFilter = $state('');
 	let selectedLog: LogDetail | null = $state(null);
 	let loadingLogs = $state(false);
+
+	// Activity (audit logs) state
+	let auditLogs: AuditLog[] = $state([]);
+	let auditTotal = $state(0);
+	let auditPage = $state(1);
+	let auditPerPage = 25;
+	let auditUserFilter = $state('');
+	let auditEventFilter = $state('');
+	let loadingAudit = $state(false);
+
+	// Widget logs state
+	let widgetLogs: WidgetConversationLog[] = $state([]);
+	let widgetTotal = $state(0);
+	let widgetPage = $state(1);
+	let widgetPerPage = 25;
+	let widgetEmbedFilter = $state('');
+	let loadingWidget = $state(false);
 
 	// Settings state
 	let providers: AdminProvider[] = $state([]);
@@ -86,10 +109,14 @@
 		greeting_message: 'Hello! How can I help you?',
 		provider: '',
 		model: '',
-		api_key: ''
+		api_key: '',
+		custom_css: ''
 	});
 	let copiedSnippetId = $state('');
 	let copiedRawKey = $state(false);
+	let previewKeyId: string | null = $state(null);
+	let embedCompletionModels: AdminModel[] = $state([]);
+	let embedLoadingModels = $state(false);
 
 	onMount(() => {
 		const unsub = authStore.subscribe((state) => {
@@ -191,6 +218,92 @@
 			error = e instanceof Error ? e.message : 'Failed to load conversation';
 		}
 	}
+
+	// ---- Audit Logs (Activity) ----
+	const eventFilterGroups: Record<string, string[]> = {
+		'Documents': ['document.upload', 'document.delete', 'document.rescan'],
+		'Crawl': ['crawl.start'],
+		'Auth': ['auth.login', 'auth.setup'],
+		'Chat': ['chat.create', 'chat.delete', 'chat.message'],
+		'Admin': ['admin.invite', 'admin.update_role', 'admin.delete_user', 'admin.embed_key.create', 'admin.embed_key.update', 'admin.embed_key.delete', 'admin.embed_key.toggle'],
+		'Settings': ['settings.update_key', 'settings.delete_key', 'settings.update_preferences'],
+		'Widget': ['widget.message']
+	};
+
+	async function loadAuditLogs() {
+		loadingAudit = true;
+		try {
+			const params = new URLSearchParams();
+			params.set('page', auditPage.toString());
+			params.set('per_page', auditPerPage.toString());
+			if (auditUserFilter) params.set('user_id', auditUserFilter);
+			if (auditEventFilter) params.set('event_type', auditEventFilter);
+
+			const resp = await api.get<AuditLogsResponse>(`/api/admin/audit-logs?${params}`);
+			auditLogs = resp.logs;
+			auditTotal = resp.total;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load audit logs';
+		} finally {
+			loadingAudit = false;
+		}
+	}
+
+	function getEventBadgeClass(eventType: string): string {
+		if (eventType.startsWith('document.')) return 'bg-blue-500/10 text-blue-500';
+		if (eventType.startsWith('crawl.')) return 'bg-purple-500/10 text-purple-500';
+		if (eventType.startsWith('auth.')) return 'bg-green-500/10 text-green-500';
+		if (eventType.startsWith('chat.')) return 'bg-cyan-500/10 text-cyan-500';
+		if (eventType.startsWith('admin.')) return 'bg-orange-500/10 text-orange-500';
+		if (eventType.startsWith('settings.')) return 'bg-yellow-500/10 text-yellow-500';
+		if (eventType.startsWith('widget.')) return 'bg-pink-500/10 text-pink-500';
+		return 'bg-secondary text-secondary-foreground';
+	}
+
+	function resolveUsername(userId: string | null): string {
+		if (!userId) return 'System';
+		const user = users.find((u) => u.id === userId);
+		return user ? user.username : userId.slice(0, 8) + '...';
+	}
+
+	// ---- Widget Logs ----
+	async function loadWidgetLogs() {
+		loadingWidget = true;
+		try {
+			const params = new URLSearchParams();
+			params.set('page', widgetPage.toString());
+			params.set('per_page', widgetPerPage.toString());
+			if (widgetEmbedFilter) params.set('embed_key_id', widgetEmbedFilter);
+
+			const resp = await api.get<WidgetLogsResponse>(`/api/admin/widget-logs?${params}`);
+			widgetLogs = resp.conversations;
+			widgetTotal = resp.total;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load widget logs';
+		} finally {
+			loadingWidget = false;
+		}
+	}
+
+	function switchLogsSubTab(sub: LogsSubTab) {
+		logsSubTab = sub;
+		selectedLog = null;
+		if (sub === 'conversations' && logs.length === 0) {
+			loadLogs();
+		}
+		if (sub === 'activity' && auditLogs.length === 0) {
+			loadAuditLogs();
+		}
+		if (sub === 'widget') {
+			if (widgetLogs.length === 0) loadWidgetLogs();
+			if (!embedLoaded) {
+				loadEmbedKeys();
+			}
+		}
+	}
+
+	let auditTotalPages = $derived(Math.ceil(auditTotal / auditPerPage));
+	let widgetTotalPages = $derived(Math.ceil(widgetTotal / widgetPerPage));
 
 	// ---- Settings ----
 	async function loadSettings() {
@@ -300,6 +413,10 @@
 	}
 
 	// ---- Embed Keys ----
+	let configuredProviders = $derived(
+		providers.filter((p) => apiKeys.some((k) => k.provider === p.provider_id))
+	);
+
 	async function loadEmbedKeys() {
 		if (embedLoaded) return;
 		try {
@@ -307,6 +424,41 @@
 			embedLoaded = true;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load embed keys';
+		}
+	}
+
+	async function ensureProvidersLoaded() {
+		if (providers.length > 0) return;
+		try {
+			const [provs, keys] = await Promise.all([
+				api.get<AdminProvider[]>('/api/settings/providers'),
+				api.get<ApiKey[]>('/api/settings/api-keys')
+			]);
+			providers = provs;
+			apiKeys = keys;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load providers';
+		}
+	}
+
+	async function onEmbedProviderChange() {
+		embedForm = { ...embedForm, model: '' };
+		embedCompletionModels = [];
+		if (!embedForm.provider) return;
+		embedLoadingModels = true;
+		try {
+			const models = await api.get<AdminModel[]>(
+				`/api/settings/providers/${embedForm.provider}/models`
+			);
+			embedCompletionModels = models.filter((m) => m.model_type === 'completion');
+			const def = embedCompletionModels.find((m) => m.is_default);
+			if (def) {
+				embedForm = { ...embedForm, model: def.model_id };
+			}
+		} catch {
+			embedCompletionModels = [];
+		} finally {
+			embedLoadingModels = false;
 		}
 	}
 
@@ -321,14 +473,15 @@
 			greeting_message: 'Hello! How can I help you?',
 			provider: '',
 			model: '',
-			api_key: ''
+			api_key: '',
+			custom_css: ''
 		};
 		editingEmbedId = null;
 		showEmbedForm = false;
 		rawKeyDisplay = null;
 	}
 
-	function startEditEmbed(key: EmbedKey) {
+	async function startEditEmbed(key: EmbedKey) {
 		editingEmbedId = key.id;
 		embedForm = {
 			name: key.name,
@@ -340,10 +493,28 @@
 			greeting_message: key.greeting_message,
 			provider: key.provider,
 			model: key.model,
-			api_key: ''
+			api_key: '',
+			custom_css: key.custom_css
 		};
 		showEmbedForm = true;
 		rawKeyDisplay = null;
+
+		// Load models for the existing provider
+		if (key.provider) {
+			embedLoadingModels = true;
+			try {
+				const models = await api.get<AdminModel[]>(
+					`/api/settings/providers/${key.provider}/models`
+				);
+				embedCompletionModels = models.filter((m) => m.model_type === 'completion');
+			} catch {
+				embedCompletionModels = [];
+			} finally {
+				embedLoadingModels = false;
+			}
+		} else {
+			embedCompletionModels = [];
+		}
 	}
 
 	async function saveEmbedKey() {
@@ -368,7 +539,8 @@
 					greeting_message: embedForm.greeting_message,
 					provider: embedForm.provider,
 					model: embedForm.model,
-					api_key: embedForm.api_key || undefined
+					api_key: embedForm.api_key || undefined,
+					custom_css: embedForm.custom_css
 				});
 				success = 'Embed key updated';
 			} else {
@@ -382,7 +554,8 @@
 					greeting_message: embedForm.greeting_message,
 					provider: embedForm.provider,
 					model: embedForm.model,
-					api_key: embedForm.api_key
+					api_key: embedForm.api_key,
+					custom_css: embedForm.custom_css
 				});
 				rawKeyDisplay = resp.raw_key;
 				success = 'Embed key created! Copy the key below - it won\'t be shown again.';
@@ -421,8 +594,10 @@
 		}
 	}
 
+	const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
 	function getEmbedSnippet(key: EmbedKey): string {
-		return `<script src="${window.location.origin}/static/widget.js" data-key="PASTE_YOUR_KEY_HERE" data-server="${window.location.origin}"><\/script>`;
+		return `<script src="${backendUrl}/static/widget.js" data-key="PASTE_YOUR_KEY_HERE" data-server="${backendUrl}"><\/script>`;
 	}
 
 	async function copyToClipboard(text: string, id?: string) {
@@ -454,14 +629,15 @@
 
 	function switchTab(tab: Tab) {
 		activeTab = tab;
-		if (tab === 'logs' && logs.length === 0) {
-			loadLogs();
+		if (tab === 'logs') {
+			switchLogsSubTab(logsSubTab);
 		}
 		if (tab === 'settings') {
 			loadSettings();
 		}
 		if (tab === 'embed') {
 			loadEmbedKeys();
+			ensureProvidersLoaded();
 		}
 	}
 
@@ -670,7 +846,277 @@
 
 			<!-- Logs Tab -->
 			{:else if activeTab === 'logs'}
-				{#if selectedLog}
+				<!-- Sub-tab navigation -->
+				<div class="flex gap-4 border-b border-border pb-0 -mt-4 mb-4">
+					{#each [['conversations', 'Conversations'], ['widget', 'Widget'], ['activity', 'Activity']] as [sub, label]}
+						<button
+							onclick={() => switchLogsSubTab(sub as LogsSubTab)}
+							class="relative pb-3 text-sm font-medium transition-colors {logsSubTab === sub
+								? 'text-foreground'
+								: 'text-muted-foreground hover:text-foreground'}"
+						>
+							{label}
+							{#if logsSubTab === sub}
+								<span class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></span>
+							{/if}
+						</button>
+					{/each}
+				</div>
+
+				{#if logsSubTab === 'activity'}
+					<!-- Activity (Audit Logs) View -->
+					<section class="space-y-4">
+						<div class="flex items-center justify-between">
+							<h2 class="text-base font-semibold">Activity Log</h2>
+							<button
+								onclick={loadAuditLogs}
+								class="rounded-md border border-input px-3 py-1.5 text-xs hover:bg-accent"
+							>
+								Refresh
+							</button>
+						</div>
+
+						<div class="flex flex-wrap gap-3">
+							<div class="space-y-1">
+								<label for="auditEventFilter" class="text-xs text-muted-foreground">Event type</label>
+								<select
+									id="auditEventFilter"
+									bind:value={auditEventFilter}
+									onchange={() => {
+										auditPage = 1;
+										loadAuditLogs();
+									}}
+									class="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none"
+								>
+									<option value="">All events</option>
+									{#each Object.entries(eventFilterGroups) as [group, types]}
+										{#each types as type}
+											<option value={type}>{type}</option>
+										{/each}
+									{/each}
+								</select>
+							</div>
+							<div class="space-y-1">
+								<label for="auditUserFilter" class="text-xs text-muted-foreground">Filter by user</label>
+								<select
+									id="auditUserFilter"
+									bind:value={auditUserFilter}
+									onchange={() => {
+										auditPage = 1;
+										loadAuditLogs();
+									}}
+									class="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none"
+								>
+									<option value="">All users</option>
+									{#each users as user}
+										<option value={user.id}>{user.username} ({user.email})</option>
+									{/each}
+								</select>
+							</div>
+						</div>
+
+						{#if loadingAudit}
+							<div class="flex justify-center py-8">
+								<div
+									class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent"
+								></div>
+							</div>
+						{:else if auditLogs.length === 0}
+							<p class="py-8 text-center text-sm text-muted-foreground">
+								No activity found.
+							</p>
+						{:else}
+							<div class="rounded-xl border border-border">
+								<div
+									class="grid grid-cols-[auto_1fr_auto_auto] gap-4 border-b border-border px-4 py-3 text-xs font-medium text-muted-foreground"
+								>
+									<span>Event</span>
+									<span>Description</span>
+									<span>User</span>
+									<span>Time</span>
+								</div>
+
+								{#each auditLogs as log}
+									<div
+										class="grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 border-b border-border px-4 py-3 last:border-0"
+									>
+										<div>
+											<span
+												class="inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium {getEventBadgeClass(log.event_type)}"
+											>
+												{log.event_type}
+											</span>
+										</div>
+										<div class="min-w-0">
+											<p class="truncate text-sm">{log.description}</p>
+											{#if log.resource_type && log.resource_id}
+												<p class="truncate text-xs text-muted-foreground">
+													{log.resource_type}: {log.resource_id}
+												</p>
+											{/if}
+										</div>
+										<div>
+											<span class="text-sm text-muted-foreground">
+												{resolveUsername(log.user_id)}
+											</span>
+										</div>
+										<div>
+											<span class="whitespace-nowrap text-xs text-muted-foreground">
+												{formatDateTime(log.created_at)}
+											</span>
+										</div>
+									</div>
+								{/each}
+							</div>
+
+							{#if auditTotalPages > 1}
+								<div class="flex items-center justify-between pt-2">
+									<span class="text-xs text-muted-foreground">
+										{auditTotal} events &middot; Page {auditPage} of {auditTotalPages}
+									</span>
+									<div class="flex gap-2">
+										<button
+											onclick={() => {
+												auditPage = Math.max(1, auditPage - 1);
+												loadAuditLogs();
+											}}
+											disabled={auditPage <= 1}
+											class="rounded-md border border-input px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
+										>
+											Prev
+										</button>
+										<button
+											onclick={() => {
+												auditPage = Math.min(auditTotalPages, auditPage + 1);
+												loadAuditLogs();
+											}}
+											disabled={auditPage >= auditTotalPages}
+											class="rounded-md border border-input px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
+										>
+											Next
+										</button>
+									</div>
+								</div>
+							{/if}
+						{/if}
+					</section>
+				{:else if logsSubTab === 'widget'}
+					<!-- Widget Logs View -->
+					<section class="space-y-4">
+						<div class="flex items-center justify-between">
+							<h2 class="text-base font-semibold">Widget Chat Logs</h2>
+							<button
+								onclick={loadWidgetLogs}
+								class="rounded-md border border-input px-3 py-1.5 text-xs hover:bg-accent"
+							>
+								Refresh
+							</button>
+						</div>
+
+						<div class="flex gap-3">
+							<div class="space-y-1">
+								<label for="widgetEmbedFilter" class="text-xs text-muted-foreground">Filter by embed key</label>
+								<select
+									id="widgetEmbedFilter"
+									bind:value={widgetEmbedFilter}
+									onchange={() => {
+										widgetPage = 1;
+										loadWidgetLogs();
+									}}
+									class="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none"
+								>
+									<option value="">All embed keys</option>
+									{#each embedKeys as key}
+										<option value={key.id}>{key.name}</option>
+									{/each}
+								</select>
+							</div>
+						</div>
+
+						{#if loadingWidget}
+							<div class="flex justify-center py-8">
+								<div
+									class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent"
+								></div>
+							</div>
+						{:else if widgetLogs.length === 0}
+							<p class="py-8 text-center text-sm text-muted-foreground">
+								No widget conversations found.
+							</p>
+						{:else}
+							<div class="rounded-xl border border-border">
+								<div
+									class="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-4 border-b border-border px-4 py-3 text-xs font-medium text-muted-foreground"
+								>
+									<span>Embed Key</span>
+									<span>Session</span>
+									<span>Title</span>
+									<span>Messages</span>
+									<span>Last Active</span>
+								</div>
+
+								{#each widgetLogs as wlog}
+									<button
+										onclick={() => viewConversation(wlog.id)}
+										class="grid w-full grid-cols-[1fr_1fr_1fr_auto_auto] items-center gap-4 border-b border-border px-4 py-3 text-left transition-colors hover:bg-accent/50 last:border-0"
+									>
+										<div class="min-w-0">
+											<p class="truncate text-sm font-medium">{wlog.embed_key_name}</p>
+										</div>
+										<div class="min-w-0">
+											<p class="truncate text-xs text-muted-foreground font-mono">{wlog.session_id ? wlog.session_id.slice(0, 12) + '...' : '-'}</p>
+										</div>
+										<div class="min-w-0">
+											<p class="truncate text-sm">{wlog.title}</p>
+										</div>
+										<div>
+											<span
+												class="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium"
+											>
+												{wlog.message_count}
+											</span>
+										</div>
+										<div>
+											<span class="text-xs text-muted-foreground">
+												{formatDate(wlog.updated_at)}
+											</span>
+										</div>
+									</button>
+								{/each}
+							</div>
+
+							{#if widgetTotalPages > 1}
+								<div class="flex items-center justify-between pt-2">
+									<span class="text-xs text-muted-foreground">
+										{widgetTotal} conversations &middot; Page {widgetPage} of {widgetTotalPages}
+									</span>
+									<div class="flex gap-2">
+										<button
+											onclick={() => {
+												widgetPage = Math.max(1, widgetPage - 1);
+												loadWidgetLogs();
+											}}
+											disabled={widgetPage <= 1}
+											class="rounded-md border border-input px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
+										>
+											Prev
+										</button>
+										<button
+											onclick={() => {
+												widgetPage = Math.min(widgetTotalPages, widgetPage + 1);
+												loadWidgetLogs();
+											}}
+											disabled={widgetPage >= widgetTotalPages}
+											class="rounded-md border border-input px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
+										>
+											Next
+										</button>
+									</div>
+								</div>
+							{/if}
+						{/if}
+					</section>
+				{:else if selectedLog}
 					<section class="space-y-4">
 						<div class="flex items-center gap-3">
 							<button
@@ -1106,11 +1552,14 @@
 									id="embedDomains"
 									type="text"
 									bind:value={embedForm.allowed_domains}
-									placeholder="example.com, app.example.com (empty = allow all)"
+									placeholder="example.com, app.example.com, localhost"
 									class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none ring-ring focus:ring-2"
 								/>
 								<p class="text-xs text-muted-foreground">
-									Comma-separated list of domains. Leave empty to allow from any domain.
+									Comma-separated list of domains. Subdomains are included automatically (e.g.
+									"example.com" also allows "app.example.com"). Add "localhost" for local
+									development. <strong>Required</strong> — browser requests are blocked if no
+									domains are configured.
 								</p>
 							</div>
 
@@ -1177,23 +1626,59 @@
 							<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 								<div class="space-y-1.5">
 									<label for="embedProvider" class="text-sm font-medium">LLM Provider</label>
-									<input
-										id="embedProvider"
-										type="text"
-										bind:value={embedForm.provider}
-										placeholder="e.g. openai (optional, uses default)"
-										class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none ring-ring focus:ring-2"
-									/>
+									{#if configuredProviders.length > 0}
+										<select
+											id="embedProvider"
+											bind:value={embedForm.provider}
+											onchange={onEmbedProviderChange}
+											class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm outline-none ring-ring focus:ring-2"
+										>
+											<option value="">Use system default</option>
+											{#each configuredProviders as p}
+												<option value={p.provider_id}>{p.display_name}</option>
+											{/each}
+										</select>
+									{:else}
+										<div
+											class="flex h-10 items-center rounded-lg border border-dashed border-input bg-background px-3"
+										>
+											<span class="text-xs text-muted-foreground">
+												No providers with API keys configured
+											</span>
+										</div>
+									{/if}
 								</div>
 								<div class="space-y-1.5">
 									<label for="embedModel" class="text-sm font-medium">Model</label>
-									<input
-										id="embedModel"
-										type="text"
-										bind:value={embedForm.model}
-										placeholder="e.g. gpt-4o (optional, uses default)"
-										class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none ring-ring focus:ring-2"
-									/>
+									{#if embedLoadingModels}
+										<div
+											class="flex h-10 items-center rounded-lg border border-input bg-background px-3"
+										>
+											<span class="text-xs text-muted-foreground">Loading models...</span>
+										</div>
+									{:else if embedCompletionModels.length > 0}
+										<select
+											id="embedModel"
+											bind:value={embedForm.model}
+											class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm outline-none ring-ring focus:ring-2"
+										>
+											{#each embedCompletionModels as m}
+												<option value={m.model_id}>
+													{m.display_name}{m.is_default ? ' (default)' : ''}
+												</option>
+											{/each}
+										</select>
+									{:else}
+										<div
+											class="flex h-10 items-center rounded-lg border border-dashed border-input bg-background px-3"
+										>
+											<span class="text-xs text-muted-foreground">
+												{embedForm.provider
+													? 'No models available'
+													: 'Select a provider first'}
+											</span>
+										</div>
+									{/if}
 								</div>
 							</div>
 
@@ -1210,6 +1695,22 @@
 								/>
 								<p class="text-xs text-muted-foreground">
 									Dedicated API key for this widget. If empty, the system default will be used.
+								</p>
+							</div>
+
+							<div class="space-y-1.5">
+								<label for="embedCustomCss" class="text-sm font-medium">Custom CSS</label>
+								<textarea
+									id="embedCustomCss"
+									bind:value={embedForm.custom_css}
+									rows="4"
+									placeholder={`.rag-panel { border-radius: 24px; }\n.rag-header { border-radius: 24px 24px 0 0; }\n.rag-bubble { width: 64px; height: 64px; }`}
+									class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm font-mono outline-none ring-ring focus:ring-2"
+								></textarea>
+								<p class="text-xs text-muted-foreground">
+									Override widget styles. Available classes: .rag-panel, .rag-header, .rag-bubble,
+									.rag-messages, .rag-msg, .rag-msg-user, .rag-msg-assistant, .rag-input-area,
+									.rag-input, .rag-send
 								</p>
 							</div>
 

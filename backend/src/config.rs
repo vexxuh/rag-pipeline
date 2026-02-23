@@ -110,9 +110,17 @@ impl AppConfig {
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+
+    // Env-var tests mutate shared process state, so they must run sequentially.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn test_default_config_loads() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("APP__SERVER__PORT") };
         unsafe { std::env::set_var("RUN_ENV", "development") };
+
         let config = AppConfig::load();
         assert!(config.is_ok(), "Default config should load: {config:?}");
 
@@ -124,6 +132,7 @@ mod tests {
 
     #[test]
     fn test_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("APP__SERVER__PORT", "8080") };
         unsafe { std::env::set_var("RUN_ENV", "development") };
 

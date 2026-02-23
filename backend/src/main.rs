@@ -106,24 +106,19 @@ async fn main() -> anyhow::Result<()> {
         // Auth
         .route("/api/auth/me", get(auth::me))
         // Conversations
-        .route("/api/conversations", post(chat::create_conversation))
-        .route("/api/conversations", get(chat::list_conversations))
-        .route("/api/conversations/{id}", get(chat::get_conversation))
-        .route("/api/conversations/{id}", delete(chat::delete_conversation))
+        .route("/api/conversations", get(chat::list_conversations).post(chat::create_conversation))
+        .route("/api/conversations/{id}", get(chat::get_conversation).delete(chat::delete_conversation))
         .route(
             "/api/conversations/{id}/messages",
             post(chat::send_message),
         )
         // Documents
-        .route("/api/documents", post(documents::upload))
-        .route("/api/documents", get(documents::list))
+        .route("/api/documents", get(documents::list).post(documents::upload))
         .route("/api/documents/limits", get(documents::upload_limits))
-        .route("/api/documents/{id}", get(documents::get_document))
-        .route("/api/documents/{id}", delete(documents::delete_document))
+        .route("/api/documents/{id}", get(documents::get_document).delete(documents::delete_document))
         .route("/api/documents/rescan", post(documents::rescan))
         // Crawl
-        .route("/api/crawl", post(crawl::start_crawl))
-        .route("/api/crawl", get(crawl::list_crawl_jobs))
+        .route("/api/crawl", get(crawl::list_crawl_jobs).post(crawl::start_crawl))
         .route("/api/crawl/{id}", get(crawl::get_crawl_job))
         // Settings (user-facing — only admin-enabled providers/models)
         .route("/api/settings/providers", get(settings::list_providers))
@@ -134,17 +129,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/settings/api-keys", get(settings::list_api_keys))
         .route(
             "/api/settings/api-keys/{provider}",
-            put(settings::set_api_key),
+            put(settings::set_api_key).delete(settings::delete_api_key),
         )
-        .route(
-            "/api/settings/api-keys/{provider}",
-            delete(settings::delete_api_key),
-        )
-        .route("/api/settings/preferences", get(settings::get_preferences))
-        .route(
-            "/api/settings/preferences",
-            put(settings::update_preferences),
-        )
+        .route("/api/settings/preferences", get(settings::get_preferences).put(settings::update_preferences))
         // Admin — User management
         .route("/api/admin/users", get(admin::list_users))
         .route(
@@ -155,13 +142,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/users/{user_id}",
             delete(admin::delete_user),
         )
-        .route("/api/admin/invites", post(admin::invite_user))
-        .route("/api/admin/invites", get(admin::list_invites))
+        .route("/api/admin/invites", get(admin::list_invites).post(admin::invite_user))
         // Admin — Logs
         .route("/api/admin/logs", get(admin_logs::list_conversation_logs))
         .route(
             "/api/admin/logs/{id}",
             get(admin_logs::get_conversation_log),
+        )
+        .route(
+            "/api/admin/widget-logs",
+            get(admin_logs::list_widget_logs),
         )
         // Admin — Provider / model config
         .route(
@@ -174,11 +164,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/admin/config/providers/{provider_id}/models",
-            get(admin_config::list_models),
-        )
-        .route(
-            "/api/admin/config/providers/{provider_id}/models",
-            post(admin_config::add_model),
+            get(admin_config::list_models).post(admin_config::add_model),
         )
         .route(
             "/api/admin/config/models/{model_id}",
@@ -194,19 +180,12 @@ async fn main() -> anyhow::Result<()> {
             get(admin_audit::list_audit_logs),
         )
         // Admin — Embed keys
-        .route("/api/admin/embed-keys", post(admin_embed::create_key))
-        .route("/api/admin/embed-keys", get(admin_embed::list_keys))
+        .route("/api/admin/embed-keys", get(admin_embed::list_keys).post(admin_embed::create_key))
         .route(
             "/api/admin/embed-keys/{id}",
-            get(admin_embed::get_key),
-        )
-        .route(
-            "/api/admin/embed-keys/{id}",
-            put(admin_embed::update_key),
-        )
-        .route(
-            "/api/admin/embed-keys/{id}",
-            delete(admin_embed::delete_key),
+            get(admin_embed::get_key)
+                .put(admin_embed::update_key)
+                .delete(admin_embed::delete_key),
         )
         .route(
             "/api/admin/embed-keys/{id}/toggle",
@@ -221,19 +200,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/widget/config", get(widget::get_config))
         .route(
             "/api/widget/conversations",
-            post(widget::create_conversation),
-        )
-        .route(
-            "/api/widget/conversations",
-            get(widget::list_conversations),
+            get(widget::list_conversations).post(widget::create_conversation),
         )
         .route(
             "/api/widget/conversations/{id}/messages",
-            get(widget::get_messages),
-        )
-        .route(
-            "/api/widget/conversations/{id}/messages",
-            post(widget::send_message),
+            get(widget::get_messages).post(widget::send_message),
         )
         .layer(axum_mw::from_fn_with_state(
             state.clone(),

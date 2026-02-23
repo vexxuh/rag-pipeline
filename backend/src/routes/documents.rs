@@ -2,6 +2,7 @@ use axum::{
     extract::{Multipart, Path, State},
     Json,
 };
+use futures::FutureExt;
 use std::sync::Arc;
 
 use crate::db::models::document::DocumentStatus;
@@ -95,13 +96,26 @@ pub async fn upload(
         .create(
             &claims.sub,
             &original_filename,
-            "", // placeholder, will update after upload
+            "", // placeholder, will update after generating key
             &content_type,
             size_bytes,
         )
         .await?;
 
     let minio_key = StorageService::generate_key(&claims.sub, &doc.id, &original_filename);
+
+    // Persist the key so delete/download can find the object later
+    state
+        .document_repo
+        .update_minio_key(&doc.id, &minio_key)
+        .await?;
+
+    tracing::info!(
+        "Document {}: uploading {} bytes to MinIO (key={})",
+        doc.id,
+        data.len(),
+        minio_key
+    );
 
     // Upload to MinIO
     let storage = state.storage.clone();
@@ -113,6 +127,8 @@ pub async fn upload(
         .upload(&key, upload_data, &ct)
         .await
         .map_err(|e| AppError::Internal(e))?;
+
+    tracing::info!("Document {}: uploaded to MinIO successfully", doc.id);
 
     // Update status to processing
     state
@@ -130,8 +146,11 @@ pub async fn upload(
     let file_content_type = content_type.clone();
     let file_name = original_filename.clone();
 
+    tracing::info!("Document {}: spawning background processing task", doc.id);
+
     tokio::spawn(async move {
-        match process_document(
+        tracing::info!("Document {doc_id}: background task started");
+        let result = std::panic::AssertUnwindSafe(process_document(
             &storage_clone,
             &key,
             &doc_id,
@@ -142,21 +161,33 @@ pub async fn upload(
             &embedding_provider,
             &embedding_model,
             &api_key,
-        )
-        .await
-        {
-            Ok(()) => {
+        ))
+        .catch_unwind()
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
                 let _ = doc_repo
                     .update_status(&doc_id, &DocumentStatus::Ready, None)
                     .await;
                 tracing::info!("Document {doc_id} processed successfully");
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 let msg = format!("{e:#}");
                 let _ = doc_repo
                     .update_status(&doc_id, &DocumentStatus::Failed, Some(&msg))
                     .await;
                 tracing::error!("Document {doc_id} processing failed: {msg}");
+            }
+            Err(_panic) => {
+                let _ = doc_repo
+                    .update_status(
+                        &doc_id,
+                        &DocumentStatus::Failed,
+                        Some("Internal error: document processing panicked"),
+                    )
+                    .await;
+                tracing::error!("Document {doc_id} processing panicked");
             }
         }
     });
@@ -212,12 +243,12 @@ pub async fn get_document(
     Ok(Json(doc.into()))
 }
 
-#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/documents/{id}", tag = "Documents", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Document ID")), responses((status = 200))))]
+#[cfg_attr(feature = "openapi", utoipa::path(delete, path = "/api/documents/{id}", tag = "Documents", security(("bearer_auth" = [])), params(("id" = String, Path, description = "Document ID")), responses((status = 204))))]
 pub async fn delete_document(
     State(state): State<AppState>,
     claims: Claims,
     Path(id): Path<String>,
-) -> Result<(), AppError> {
+) -> Result<axum::http::StatusCode, AppError> {
     require_maintainer(&claims)?;
     let doc = state
         .document_repo
@@ -237,12 +268,14 @@ pub async fn delete_document(
         }
     }
 
-    // Delete from MinIO
-    state
-        .storage
-        .delete(&doc.minio_key)
-        .await
-        .map_err(|e| AppError::Internal(e))?;
+    // Delete from MinIO (skip if key was never set)
+    if !doc.minio_key.is_empty() {
+        state
+            .storage
+            .delete(&doc.minio_key)
+            .await
+            .map_err(|e| AppError::Internal(e))?;
+    }
 
     // Delete record
     state.document_repo.delete(&id).await?;
@@ -258,7 +291,7 @@ pub async fn delete_document(
         None,
     );
 
-    Ok(())
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// Rescan all documents: re-extract, re-chunk, and re-embed into the vector database.
@@ -355,21 +388,28 @@ async fn process_document(
     embedding_model: &str,
     api_key: &str,
 ) -> anyhow::Result<()> {
-    // Download from MinIO
+    tracing::info!("Document {doc_id}: downloading from MinIO (key={minio_key})");
     let file_bytes = storage.download(minio_key).await?;
+    tracing::info!(
+        "Document {doc_id}: downloaded {} bytes, extracting text (type={content_type}, file={filename})",
+        file_bytes.len()
+    );
 
-    // Extract text based on file type
-    let text = crate::services::text_extract::extract_text(&file_bytes, content_type, filename)?;
+    let text = crate::services::text_extract::extract_text(&file_bytes, content_type, filename).await?;
+    tracing::info!(
+        "Document {doc_id}: extracted {} chars of text, chunking...",
+        text.len()
+    );
 
-    // Chunk text for embedding
     let chunks = crate::services::text_extract::chunk_text(&text, 200, 30);
 
     if chunks.is_empty() {
-        tracing::info!("Document {doc_id}: no text chunks to embed");
+        tracing::warn!("Document {doc_id}: no text chunks produced — nothing to embed");
         return Ok(());
     }
 
-    // Generate embeddings
+    tracing::info!("Document {doc_id}: produced {} chunks, starting embedding with provider={embedding_provider} model={embedding_model}", chunks.len());
+
     if api_key.is_empty() {
         anyhow::bail!("No API key configured for embedding provider '{embedding_provider}'");
     }
@@ -382,33 +422,46 @@ async fn process_document(
         embedding_model,
     );
 
-    let texts: Vec<String> = chunks.clone();
-    let embeddings = model
-        .embed_texts(texts)
-        .await
-        .map_err(|e| anyhow::anyhow!("Embedding error: {e}"))?;
-
-    // Prepare data for Qdrant and database
+    let batch_size = 100;
+    let total_batches = (chunks.len() + batch_size - 1) / batch_size;
     let mut qdrant_data = Vec::with_capacity(chunks.len());
     let mut db_data = Vec::with_capacity(chunks.len());
 
-    for (i, (chunk, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
-        let point_id = uuid::Uuid::new_v4().to_string();
+    for (batch_num, batch_start) in (0..chunks.len()).step_by(batch_size).enumerate() {
+        let batch_end = (batch_start + batch_size).min(chunks.len());
+        let batch: Vec<String> = chunks[batch_start..batch_end].to_vec();
 
-        qdrant_data.push((point_id.clone(), embedding.vec.clone(), chunk.clone()));
-        db_data.push((
-            "document".to_string(),
-            doc_id.to_string(),
-            i as i32,
-            chunk.clone(),
-            point_id,
-        ));
+        tracing::info!(
+            "Document {doc_id}: embedding batch {}/{} ({} chunks)",
+            batch_num + 1,
+            total_batches,
+            batch.len()
+        );
+
+        let embeddings = model
+            .embed_texts(batch)
+            .await
+            .map_err(|e| anyhow::anyhow!("Embedding error on batch {}: {e}", batch_num + 1))?;
+
+        for (i, embedding) in embeddings.iter().enumerate() {
+            let global_idx = batch_start + i;
+            let point_id = uuid::Uuid::new_v4().to_string();
+
+            qdrant_data.push((point_id.clone(), embedding.vec.clone(), chunks[global_idx].clone()));
+            db_data.push((
+                "document".to_string(),
+                doc_id.to_string(),
+                global_idx as i32,
+                chunks[global_idx].clone(),
+                point_id,
+            ));
+        }
     }
 
-    // Upsert to Qdrant
+    tracing::info!("Document {doc_id}: upserting {} vectors to Qdrant", qdrant_data.len());
     vector_service.upsert_chunks(qdrant_data).await?;
 
-    // Save chunk metadata to database
+    tracing::info!("Document {doc_id}: saving {} chunk records to database", db_data.len());
     chunk_repo.create_batch(&db_data).await?;
 
     tracing::info!(

@@ -21,6 +21,7 @@ pub struct WidgetConfigResponse {
     pub widget_title: String,
     pub primary_color: String,
     pub greeting_message: String,
+    pub custom_css: String,
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(get, path = "/api/widget/config", tag = "Widget", security(("embed_key" = [])), responses((status = 200, body = WidgetConfigResponse))))]
@@ -36,6 +37,7 @@ pub async fn get_config(
         widget_title: ctx.embed_key.widget_title,
         primary_color: ctx.embed_key.primary_color,
         greeting_message: ctx.embed_key.greeting_message,
+        custom_css: ctx.embed_key.custom_css,
     }))
 }
 
@@ -180,12 +182,20 @@ pub async fn send_message(
         ctx.embed_key.model.clone()
     };
 
-    let api_key = if ctx.embed_key.api_key_encrypted.is_empty() {
-        return Err(AppError::Validation(
-            "Widget has no API key configured. Contact the administrator.".to_string(),
-        ));
-    } else {
+    let api_key = if !ctx.embed_key.api_key_encrypted.is_empty() {
         ctx.embed_key.api_key_encrypted.clone()
+    } else {
+        // Fall back to any configured API key for this provider
+        state
+            .settings_repo
+            .get_any_api_key_for_provider(&provider_name)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "No API key configured for this provider. Contact the administrator."
+                        .to_string(),
+                )
+            })?
     };
 
     let system_prompt = if ctx.embed_key.system_prompt.is_empty() {

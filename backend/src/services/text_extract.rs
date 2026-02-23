@@ -21,7 +21,7 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
 
 /// Check if a file is supported by MIME type or extension.
 pub fn is_supported(content_type: &str, filename: &str) -> bool {
-    if SUPPORTED_MIME_TYPES.contains(&content_type) {
+    if content_type != "application/octet-stream" && SUPPORTED_MIME_TYPES.contains(&content_type) {
         return true;
     }
     extension_from_filename(filename)
@@ -30,9 +30,52 @@ pub fn is_supported(content_type: &str, filename: &str) -> bool {
 }
 
 /// Extract text from file bytes, routing to the correct extractor.
-pub fn extract_text(bytes: &[u8], content_type: &str, filename: &str) -> Result<String> {
+///
+/// CPU-bound extractors (PDF, DOCX, XLSX) are run on a blocking thread pool
+/// via `spawn_blocking` so they don't stall the async runtime.
+pub async fn extract_text(bytes: &[u8], content_type: &str, filename: &str) -> Result<String> {
     let ext = extension_from_filename(filename).unwrap_or_default();
 
+    // Determine if this needs blocking extraction
+    let needs_blocking = matches!(
+        content_type,
+        "application/pdf"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            | "application/vnd.ms-excel"
+    ) || matches!(ext.as_str(), "pdf" | "docx" | "xlsx" | "xls");
+
+    if needs_blocking {
+        let bytes = bytes.to_vec();
+        let ct = content_type.to_string();
+        let ext = ext.clone();
+        let fname = filename.to_string();
+
+        tracing::info!("extract_text: starting blocking extraction for '{fname}' ({ct}, {} bytes)", bytes.len());
+
+        let handle = tokio::task::spawn_blocking(move || {
+            tracing::info!("extract_text: spawn_blocking thread started for '{fname}'");
+            let result = extract_text_sync(&bytes, &ct, &ext);
+            match &result {
+                Ok(text) => tracing::info!("extract_text: '{fname}' extraction succeeded, {} chars", text.len()),
+                Err(e) => tracing::error!("extract_text: '{fname}' extraction failed: {e:#}"),
+            }
+            result
+        });
+
+        // Time out after 120 seconds to avoid hanging forever on problematic files
+        match tokio::time::timeout(std::time::Duration::from_secs(120), handle).await {
+            Ok(join_result) => join_result.context("Text extraction task panicked")?,
+            Err(_) => anyhow::bail!("Text extraction timed out after 120s for '{filename}'"),
+        }
+    } else {
+        extract_text_sync(bytes, content_type, &ext)
+    }
+}
+
+/// Synchronous text extraction — called directly for lightweight formats,
+/// or via `spawn_blocking` for CPU-heavy ones (PDF, DOCX, XLSX).
+fn extract_text_sync(bytes: &[u8], content_type: &str, ext: &str) -> Result<String> {
     match content_type {
         "application/pdf" => extract_pdf(bytes),
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
@@ -44,7 +87,7 @@ pub fn extract_text(bytes: &[u8], content_type: &str, filename: &str) -> Result<
         "text/csv" => extract_csv(bytes),
         "text/plain" | "text/markdown" => extract_plaintext(bytes),
         // Fallback: detect by extension
-        _ => match ext.as_str() {
+        _ => match ext {
             "pdf" => extract_pdf(bytes),
             "docx" => extract_docx(bytes),
             "xlsx" | "xls" => extract_xlsx(bytes),
@@ -52,14 +95,50 @@ pub fn extract_text(bytes: &[u8], content_type: &str, filename: &str) -> Result<
             "csv" => extract_csv(bytes),
             "txt" | "md" => extract_plaintext(bytes),
             _ => Err(anyhow::anyhow!(
-                "Unsupported file type: {content_type} ({filename})"
+                "Unsupported file type: {content_type} (ext: {ext})"
             )),
         },
     }
 }
 
 fn extract_pdf(bytes: &[u8]) -> Result<String> {
+    // Try pdftotext (poppler) first — much faster and handles complex PDFs better
+    match extract_pdf_pdftotext(bytes) {
+        Ok(text) if !text.trim().is_empty() => {
+            tracing::info!("PDF extracted via pdftotext ({} chars)", text.len());
+            return Ok(text);
+        }
+        Ok(_) => tracing::warn!("pdftotext returned empty text, falling back to pdf_extract"),
+        Err(e) => tracing::warn!("pdftotext failed ({e:#}), falling back to pdf_extract"),
+    }
+
+    // Fallback to pure-Rust pdf_extract
+    tracing::info!("Extracting PDF via pdf_extract (this may be slow for large files)");
     pdf_extract::extract_text_from_mem(bytes).context("Failed to extract text from PDF")
+}
+
+fn extract_pdf_pdftotext(bytes: &[u8]) -> Result<String> {
+    use std::io::Write;
+    use std::process::Command;
+
+    // Write bytes to a temp file (pdftotext reads from file)
+    let mut tmp = tempfile::NamedTempFile::new().context("Failed to create temp file")?;
+    tmp.write_all(bytes).context("Failed to write PDF to temp file")?;
+    tmp.flush()?;
+
+    let output = Command::new("pdftotext")
+        .arg("-layout")
+        .arg(tmp.path())
+        .arg("-") // output to stdout
+        .output()
+        .context("Failed to run pdftotext — is poppler-utils installed?")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("pdftotext exited with {}: {stderr}", output.status);
+    }
+
+    String::from_utf8(output.stdout).context("pdftotext output is not valid UTF-8")
 }
 
 fn extract_docx(bytes: &[u8]) -> Result<String> {
@@ -249,10 +328,10 @@ mod tests {
         assert!(!is_supported("application/octet-stream", "image.png"));
     }
 
-    #[test]
-    fn test_extract_plaintext() {
+    #[tokio::test]
+    async fn test_extract_plaintext() {
         let bytes = b"Hello world\nThis is a test";
-        let result = extract_text(bytes, "text/plain", "test.txt").unwrap();
+        let result = extract_text(bytes, "text/plain", "test.txt").await.unwrap();
         assert_eq!(result, "Hello world\nThis is a test");
     }
 

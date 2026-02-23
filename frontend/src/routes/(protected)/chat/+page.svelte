@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$api/client';
+	import { renderMarkdown } from '$lib/markdown';
 	import type { Conversation, ConversationWithMessages, Message } from '$types/index';
 
 	let conversations: Conversation[] = $state([]);
@@ -236,9 +237,15 @@
 									? 'bg-primary text-primary-foreground'
 									: 'bg-card border border-border'}"
 							>
-								<p class="whitespace-pre-wrap">{msg.content}</p>
-								{#if msg.role === 'assistant' && streaming && msg === messages[messages.length - 1] && !msg.content}
-									<span class="inline-block h-4 w-1 animate-pulse bg-current"></span>
+								{#if msg.role === 'assistant'}
+									<div class="prose prose-sm dark:prose-invert max-w-none">
+										{@html renderMarkdown(msg.content)}
+									</div>
+									{#if streaming && msg === messages[messages.length - 1] && !msg.content}
+										<span class="inline-block h-4 w-1 animate-pulse bg-current"></span>
+									{/if}
+								{:else}
+									<p class="whitespace-pre-wrap">{msg.content}</p>
 								{/if}
 							</div>
 						</div>

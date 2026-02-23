@@ -75,6 +75,24 @@ impl SettingsRepository {
         Ok(row.map(|r| r.get("api_key")))
     }
 
+    /// Find any API key for a provider (prefers admin users, then any user).
+    /// Used as a fallback when an embed key has no dedicated API key.
+    pub async fn get_any_api_key_for_provider(&self, provider: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT k.api_key FROM user_api_keys k
+             JOIN users u ON u.id = k.user_id
+             WHERE k.provider = $1
+             ORDER BY CASE u.role WHEN 'admin' THEN 0 ELSE 1 END
+             LIMIT 1",
+        )
+        .bind(provider)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to query fallback API key")?;
+
+        Ok(row.map(|r| r.get("api_key")))
+    }
+
     pub async fn list_api_keys(&self, user_id: &str) -> Result<Vec<ApiKeyEntry>> {
         let rows = sqlx::query(
             "SELECT id, provider, to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at
